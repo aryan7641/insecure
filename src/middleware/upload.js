@@ -31,19 +31,34 @@ const importFilter = (req, file, cb) => {
   }
 };
 
-const uploadDocument = multer({
+const uploadDocumentSingle = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter: documentFilter
 }).single('document');
 
-const uploadImport = multer({
+const uploadImportSingle = multer({
   storage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: importFilter
 }).single('file');
 
+// Raw multer instances (so routes can call .single() themselves)
+const uploadDocument = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: documentFilter
+});
+
+const uploadImport = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: importFilter
+});
+
 module.exports = {
-  uploadDocument,
-  uploadImport
+  uploadDocument,     // raw multer instance — use as uploadDocument.single('file')
+  uploadImport,       // raw multer instance — use as uploadImport.single('file')
+  uploadDocumentSingle, // pre-configured single middleware
+  uploadImportSingle,   // pre-configured single middleware
 };
