@@ -74,3 +74,4 @@ const checkResourceAccess = (resourceType) => {
 };
 
 module.exports = checkResourceAccess;
+module.exports.checkResourceAccess = checkResourceAccess;

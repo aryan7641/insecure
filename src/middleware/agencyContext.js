@@ -23,3 +23,4 @@ const setAgencyContext = (req, res, next) => {
 };
 
 module.exports = setAgencyContext;
+module.exports.setAgencyContext = setAgencyContext;

@@ -14,4 +14,6 @@ const authorize = (...allowedRoles) => {
   };
 };
 
+// Support both: require('./authorize') and const { authorize } = require('./authorize')
 module.exports = authorize;
+module.exports.authorize = authorize;
