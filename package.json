@@ -10,7 +10,8 @@
     "test:integration": "jest --config jest.integration.config.js"
   },
   "dependencies": {
-    "@azure/storage-blob": "^12.17.0",
+    "@aws-sdk/client-s3": "^3.658.0",
+    "@aws-sdk/s3-request-presigner": "^3.658.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "csv-parser": "^3.0.0",

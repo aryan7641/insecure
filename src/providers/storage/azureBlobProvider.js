@@ -1,95 +1,116 @@
-const { BlobServiceClient, generateBlobSASQueryParameters, BlobSASPermissions, StorageSharedKeyCredential } = require('@azure/storage-blob');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, GetObjectCommand: GetObj } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { v4: uuidv4 } = require('uuid');
-const config = require('../../config');
 const StorageProvider = require('./storageProvider');
 
-class AzureBlobProvider extends StorageProvider {
+class S3StorageProvider extends StorageProvider {
   constructor() {
     super();
-    this.blobServiceClient = BlobServiceClient.fromConnectionString(config.azure.connectionString);
-    this.containerClient = this.blobServiceClient.getContainerClient(config.azure.containerName);
-    // Extract account name and key from connection string for SAS generation
-    const connParts = {};
-    config.azure.connectionString.split(';').forEach(part => {
-      const [key, ...vals] = part.split('=');
-      if (key && vals.length) connParts[key.trim()] = vals.join('=');
-    });
-    this.accountName = connParts['AccountName'] || '';
-    this.accountKey = connParts['AccountKey'] || '';
-  }
-
-  async upload(buffer, fileName, contentType, metadata = {}) {
-    const blobKey = `${metadata.agencyId}/${metadata.customerId}/${uuidv4()}-${fileName}`;
-    const blockBlobClient = this.containerClient.getBlockBlobClient(blobKey);
-    await blockBlobClient.uploadData(buffer, { blobHTTPHeaders: { blobContentType: contentType } });
-    return { blobKey, blobUrl: blockBlobClient.url };
-  }
-
-  async download(blobKey) {
-    const blockBlobClient = this.containerClient.getBlockBlobClient(blobKey);
-    const downloadBlockBlobResponse = await blockBlobClient.download();
-    const buffer = await streamToBuffer(downloadBlockBlobResponse.readableStreamBody);
-    return { buffer, contentType: downloadBlockBlobResponse.contentType };
-  }
-
-  async delete(blobKey) {
-    const blockBlobClient = this.containerClient.getBlockBlobClient(blobKey);
-    try {
-      await blockBlobClient.delete();
-    } catch (error) {
-      if (error.statusCode !== 404) {
-        throw error;
+    this.client = new S3Client({
+      region: process.env.AWS_REGION || 'ap-south-1',
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
       }
+    });
+    this.bucketName = process.env.S3_BUCKET_NAME;
+    if (!this.bucketName) {
+      console.warn('[S3StorageProvider] S3_BUCKET_NAME not set in environment');
     }
   }
 
-  async getSecureUrl(blobKey, expiryMinutes = 15) {
-    const blockBlobClient = this.containerClient.getBlockBlobClient(blobKey);
-    const startDate = new Date();
-    const expiryDate = new Date(startDate);
-    expiryDate.setMinutes(startDate.getMinutes() + expiryMinutes);
+  /**
+   * Upload a file buffer to S3
+   * @param {Buffer} buffer - File data
+   * @param {string} fileName - Original file name
+   * @param {string} contentType - MIME type
+   * @param {object} metadata - { agencyId, customerId }
+   * @returns {{ blobKey: string, blobUrl: string }}
+   */
+  async upload(buffer, fileName, contentType, metadata = {}) {
+    const agencyId = metadata.agencyId || 'default';
+    const customerId = metadata.customerId || 'general';
+    const blobKey = `${agencyId}/${customerId}/${uuidv4()}-${fileName}`;
 
-    if (!this.accountName || !this.accountKey) {
-      // Fallback: return the blob URL directly (not recommended for production)
-      return blockBlobClient.url;
+    await this.client.send(new PutObjectCommand({
+      Bucket: this.bucketName,
+      Key: blobKey,
+      Body: buffer,
+      ContentType: contentType,
+      Metadata: {
+        agencyId: String(agencyId),
+        customerId: String(customerId),
+        originalName: fileName
+      }
+    }));
+
+    const blobUrl = `https://${this.bucketName}.s3.ap-south-1.amazonaws.com/${blobKey}`;
+    return { blobKey, blobUrl };
+  }
+
+  /**
+   * Download a file from S3 as Buffer
+   * @param {string} blobKey - S3 object key
+   * @returns {{ buffer: Buffer, contentType: string }}
+   */
+  async download(blobKey) {
+    const response = await this.client.send(new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: blobKey
+    }));
+
+    const buffer = await streamToBuffer(response.Body);
+    return { buffer, contentType: response.ContentType };
+  }
+
+  /**
+   * Delete a file from S3
+   * @param {string} blobKey - S3 object key
+   */
+  async delete(blobKey) {
+    try {
+      await this.client.send(new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key: blobKey
+      }));
+    } catch (err) {
+      if (err.name !== 'NoSuchKey') throw err;
     }
+  }
 
-    const sharedKeyCredential = new StorageSharedKeyCredential(
-      this.accountName,
-      this.accountKey
-    );
+  /**
+   * Generate a time-limited pre-signed URL for secure document download
+   * @param {string} blobKey - S3 object key
+   * @param {number} expiryMinutes - URL expiry duration
+   * @returns {string} Pre-signed URL
+   */
+  async getSecureUrl(blobKey, expiryMinutes = 15) {
+    const command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: blobKey
+    });
 
-    const sasOptions = {
-      containerName: this.containerClient.containerName,
-      blobName: blobKey,
-      permissions: BlobSASPermissions.parse('r'),
-      startsOn: startDate,
-      expiresOn: expiryDate,
-    };
+    const signedUrl = await getSignedUrl(this.client, command, {
+      expiresIn: expiryMinutes * 60
+    });
 
-    const sasToken = generateBlobSASQueryParameters(sasOptions, sharedKeyCredential).toString();
-    return `${blockBlobClient.url}?${sasToken}`;
+    return signedUrl;
   }
 }
 
-// Helper to convert stream to buffer
-async function streamToBuffer(readableStream) {
+async function streamToBuffer(stream) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    readableStream.on('data', (data) => {
-      chunks.push(data instanceof Buffer ? data : Buffer.from(data));
-    });
-    readableStream.on('end', () => {
-      resolve(Buffer.concat(chunks));
-    });
-    readableStream.on('error', reject);
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
   });
 }
 
 let instance;
 function getStorageProvider() {
-  if (!instance) instance = new AzureBlobProvider();
+  if (!instance) instance = new S3StorageProvider();
   return instance;
 }
 
-module.exports = { AzureBlobProvider, getStorageProvider };
+module.exports = { S3StorageProvider, getStorageProvider };
