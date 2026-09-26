@@ -1,0 +1,52 @@
+let pdfParse;
+try {
+  pdfParse = require('pdf-parse');
+} catch (e) {
+  console.warn('[pdfTextExtractor] pdf-parse module not loaded:', e.message);
+}
+
+class PdfTextExtractor {
+  /**
+   * Extract raw text from a document buffer
+   * @param {Buffer} buffer 
+   * @param {string} fileType 
+   * @returns {Promise<{ rawText: string, pageCount: number, info: object }>}
+   */
+  async extractText(buffer, fileType = 'pdf') {
+    if (!buffer || !Buffer.isBuffer(buffer)) {
+      throw new Error('Valid file buffer is required for text extraction');
+    }
+
+    if (fileType.toLowerCase().includes('pdf') && pdfParse) {
+      try {
+        const data = await pdfParse(buffer);
+        return {
+          rawText: data.text || '',
+          pageCount: data.numpages || 1,
+          info: data.info || {}
+        };
+      } catch (err) {
+        console.warn('[PdfTextExtractor] Failed to parse PDF text with pdf-parse:', err.message);
+      }
+    }
+
+    // Fallback: UTF-8 / ASCII inspection
+    const rawText = buffer.toString('utf8').replace(/[^\x20-\x7E\n\r\t]/g, ' ');
+    return {
+      rawText,
+      pageCount: 1,
+      info: {}
+    };
+  }
+}
+
+let instance;
+function getPdfTextExtractor() {
+  if (!instance) instance = new PdfTextExtractor();
+  return instance;
+}
+
+module.exports = {
+  PdfTextExtractor,
+  getPdfTextExtractor
+};

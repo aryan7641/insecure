@@ -2,7 +2,10 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Agency = require('../models/Agency');
 const Customer = require('../models/Customer');
-const { ROLES, USER_STATUS, AGENCY_STATUS } = require('./constants');
+const InsurancePolicy = require('../models/InsurancePolicy');
+const WhatsAppTemplate = require('../models/WhatsAppTemplate');
+const FollowUp = require('../models/FollowUp');
+const { ROLES, USER_STATUS, AGENCY_STATUS, POLICY_TYPES, POLICY_STATUSES, FOLLOW_UP_TYPES, FOLLOW_UP_STATUSES } = require('./constants');
 
 async function seedDatabaseIfEmpty() {
   try {
@@ -10,9 +13,7 @@ async function seedDatabaseIfEmpty() {
     try {
       await User.collection.dropIndex('googleId_1');
       console.log('[Seeder] Dropped legacy non-sparse googleId_1 index');
-    } catch (e) {
-      // index didn't exist or already dropped
-    }
+    } catch (e) {}
 
     const agencyCount = await Agency.countDocuments();
     let agency;
@@ -32,7 +33,7 @@ async function seedDatabaseIfEmpty() {
     let adminUser = await User.findOne({ email: 'admin@apexwealth.in' });
     if (!adminUser) {
       adminUser = await User.create({
-        name: 'Aryan Sharma (Admin)',
+        name: 'Aryan Sharma',
         email: 'admin@apexwealth.in',
         role: ROLES.ADMIN,
         status: USER_STATUS.ACTIVE,
@@ -61,56 +62,147 @@ async function seedDatabaseIfEmpty() {
       $addToSet: { admins: adminUser._id, agents: agentUser._id }
     });
 
-    // Check or create sample customers if customer count is 0
-    const customerCount = await Customer.countDocuments();
-    if (customerCount === 0) {
-      const sampleCustomers = [
+    // Seed Indian Insurance WhatsApp Templates if empty
+    const templateCount = await WhatsAppTemplate.countDocuments({ agencyId: agency._id });
+    if (templateCount === 0) {
+      const templates = [
         {
           agencyId: agency._id,
-          assignedAgentId: agentUser._id,
-          name: 'Vikramaditya Roy',
-          mobile: '9820198201',
-          email: 'vikram.roy@example.com',
-          pan: 'ABCDE1234F',
-          aadhaar: '123456789012',
-          occupation: 'VP of Technology',
-          income: 4500000,
-          address: { street: '402, Sea Green Apartments, Bandra West', city: 'Mumbai', state: 'Maharashtra', pincode: '400050' },
-          nominee: { name: 'Ananya Roy', relation: 'Spouse' },
+          name: 'Policy Renewal Reminder',
+          body: 'Dear {{customerName}}, your {{insuranceCompany}} policy (No. {{policyNumber}}) of ₹{{premium}} is due for renewal on {{renewalDate}}. Please renew now to maintain uninterrupted coverage: {{paymentLink}}. Contact {{agentName}} at {{agentContact}} for help.',
+          variables: ['customerName', 'insuranceCompany', 'policyNumber', 'premium', 'renewalDate', 'paymentLink', 'agentName', 'agentContact'],
+          isAgencyWide: true,
           createdBy: adminUser._id
         },
         {
           agencyId: agency._id,
-          assignedAgentId: agentUser._id,
-          name: 'Sunita Mehra',
-          mobile: '9811223344',
-          email: 'sunita.mehra@example.com',
-          pan: 'BLPPM4421K',
-          aadhaar: '987654321098',
-          occupation: 'Chief Medical Officer',
-          income: 3800000,
-          address: { street: '14, Golf Links', city: 'New Delhi', state: 'Delhi', pincode: '110003' },
-          nominee: { name: 'Dr. Rajesh Mehra', relation: 'Spouse' },
+          name: 'Motor Insurance Renewal Notice',
+          body: 'Hi {{customerName}}, your motor insurance for {{vehicleNumber}} ({{vehicleModel}}) with {{insuranceCompany}} is expiring on {{renewalDate}}. Claim NCB discount of {{ncb}}%. Click here to renew instantly: {{paymentLink}} or call {{agentName}}.',
+          variables: ['customerName', 'vehicleNumber', 'vehicleModel', 'insuranceCompany', 'renewalDate', 'ncb', 'paymentLink', 'agentName'],
+          isAgencyWide: true,
           createdBy: adminUser._id
         },
         {
           agencyId: agency._id,
-          assignedAgentId: adminUser._id,
-          name: 'Rohan Deshmukh',
-          mobile: '9765432100',
-          email: 'rohan.deshmukh@example.com',
-          pan: 'CRRPD9876Q',
-          aadhaar: '456789012345',
-          occupation: 'Managing Director',
-          income: 7500000,
-          address: { street: 'Penthouse 8, Koregaon Park', city: 'Pune', state: 'Maharashtra', pincode: '411001' },
-          nominee: { name: 'Pooja Deshmukh', relation: 'Spouse' },
+          name: 'Health Insurance Due Reminder',
+          body: 'Dear {{customerName}}, a friendly reminder that your Health Insurance plan with {{insuranceCompany}} (Sum Insured: ₹{{sumAssured}}) renews on {{renewalDate}}. Premium amount: ₹{{premium}}. Stay protected without waiting period breaks: {{paymentLink}}.',
+          variables: ['customerName', 'insuranceCompany', 'sumAssured', 'renewalDate', 'premium', 'paymentLink'],
+          isAgencyWide: true,
+          createdBy: adminUser._id
+        },
+        {
+          agencyId: agency._id,
+          name: 'Welcome & Policy Document Dispatch',
+          body: 'Dear {{customerName}}, thank you for choosing Apex Wealth Partners! Attached is your official policy schedule for {{insuranceCompany}} (Policy #{{policyNumber}}). We are here 24/7 for any claims or servicing queries.',
+          variables: ['customerName', 'insuranceCompany', 'policyNumber'],
+          isAgencyWide: true,
           createdBy: adminUser._id
         }
       ];
+      await WhatsAppTemplate.insertMany(templates);
+      console.log('[Seeder] Seeded insurance WhatsApp templates');
+    }
 
-      await Customer.insertMany(sampleCustomers);
-      console.log('[Seeder] Inserted sample customers:', sampleCustomers.length);
+    // Seed sample policies if empty
+    const policyCount = await InsurancePolicy.countDocuments({ agencyId: agency._id });
+    if (policyCount === 0) {
+      const customer = await Customer.findOne({ agencyId: agency._id });
+      if (customer) {
+        const in30Days = new Date();
+        in30Days.setDate(in30Days.getDate() + 25);
+
+        const in10Days = new Date();
+        in10Days.setDate(in10Days.getDate() + 8);
+
+        const policies = [
+          {
+            agencyId: agency._id,
+            customerId: customer._id,
+            assignedAgentId: agentUser._id,
+            insuranceCompany: 'HDFC ERGO General Insurance',
+            productName: 'Optima Secure Health Plan',
+            planName: 'Family Floater',
+            policyNumber: 'HDFC-HE-998822',
+            policyType: POLICY_TYPES.HEALTH,
+            lob: 'HEALTH',
+            subLob: 'Family Floater',
+            businessType: 'renewal',
+            startDate: new Date('2025-10-15'),
+            endDate: in30Days,
+            renewalDate: in30Days,
+            sumAssured: 1000000,
+            basicPremium: 23728,
+            gst: 4272,
+            premium: 28000,
+            premiumFrequency: 'yearly',
+            status: POLICY_STATUSES.EXPIRING_SOON,
+            insuredMembers: [
+              { name: customer.name, relationship: 'Self', age: 38, sumInsured: 1000000 },
+              { name: 'Ananya Roy', relationship: 'Spouse', age: 35, sumInsured: 1000000 }
+            ],
+            createdBy: adminUser._id
+          },
+          {
+            agencyId: agency._id,
+            customerId: customer._id,
+            assignedAgentId: agentUser._id,
+            insuranceCompany: 'ICICI Lombard General Insurance',
+            productName: 'Private Car Comprehensive',
+            planName: 'Zero Depreciation + RSA',
+            policyNumber: 'ICICI-MOT-774411',
+            policyType: POLICY_TYPES.MOTOR,
+            lob: 'MOTOR',
+            subLob: 'Private Car Comprehensive',
+            businessType: 'new',
+            startDate: new Date('2025-10-01'),
+            endDate: in10Days,
+            renewalDate: in10Days,
+            sumAssured: 850000,
+            basicPremium: 14500,
+            gst: 2610,
+            premium: 17110,
+            premiumFrequency: 'yearly',
+            status: POLICY_STATUSES.EXPIRING_SOON,
+            vehicleDetails: {
+              registrationNumber: 'MH02EK4921',
+              vehicleType: 'Private Car',
+              make: 'Hyundai',
+              model: 'Creta',
+              variant: 'SX (O) 1.5 Petrol',
+              fuelType: 'Petrol',
+              manufacturingYear: 2022,
+              idv: 850000,
+              ncb: 25
+            },
+            createdBy: adminUser._id
+          },
+          {
+            agencyId: agency._id,
+            customerId: customer._id,
+            assignedAgentId: adminUser._id,
+            insuranceCompany: 'Tata AIA Life Insurance',
+            productName: 'Sampoorna Raksha Supreme',
+            planName: 'Pure Term with Life Stage Option',
+            policyNumber: 'TATA-LIFE-552299',
+            policyType: POLICY_TYPES.TERM,
+            lob: 'LIFE',
+            subLob: 'Pure Term Life',
+            businessType: 'new',
+            startDate: new Date('2024-03-10'),
+            endDate: new Date('2054-03-10'),
+            renewalDate: new Date('2027-03-10'),
+            sumAssured: 20000000,
+            basicPremium: 22000,
+            gst: 3960,
+            premium: 25960,
+            premiumFrequency: 'yearly',
+            status: POLICY_STATUSES.ACTIVE,
+            createdBy: adminUser._id
+          }
+        ];
+        await InsurancePolicy.insertMany(policies);
+        console.log('[Seeder] Seeded sample insurance policies');
+      }
     }
   } catch (err) {
     console.error('[Seeder] Error seeding database:', err.message);

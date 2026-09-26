@@ -22,6 +22,8 @@ const customerSchema = new Schema(
     mobile: { type: String, required: true, trim: true },
     email: { type: String, lowercase: true, trim: true },
     dob: Date,
+    gender: { type: String, enum: ['male', 'female', 'other', ''], trim: true },
+    customerType: { type: String, enum: ['individual', 'corporate', 'hni', 'retail', ''], default: 'individual' },
     address: {
       street: String,
       city: String,
@@ -29,20 +31,28 @@ const customerSchema = new Schema(
       pincode: String,
       country: { type: String, default: 'India' }
     },
+    city: String,
+    state: String,
+    pincode: String,
     pan: { type: String, uppercase: true, trim: true },
     aadhaar: String,
+    notes: String,
+    tags: [{ type: String, trim: true }],
     nominee: {
       name: String,
       relation: String,
       dob: Date,
-      contact: String
+      contact: String,
+      share: { type: Number, default: 100 }
     },
     family: [
       {
         name: String,
         relation: String,
         dob: Date,
-        contact: String
+        age: Number,
+        contact: String,
+        gender: String
       }
     ],
     occupation: String,

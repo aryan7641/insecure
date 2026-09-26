@@ -21,6 +21,11 @@ exports.update = catchAsync(async (req, res) => {
   return new ApiResponse(200, 'Policy updated successfully', policy).send(res);
 });
 
+exports.renew = catchAsync(async (req, res) => {
+  const result = await insurancePolicyService.renewPolicy(req.params.policyId, req.agencyId, req.body, req.user);
+  return new ApiResponse(200, 'Policy renewed successfully', result).send(res);
+});
+
 exports.delete = catchAsync(async (req, res) => {
   await insurancePolicyService.softDelete(req.params.policyId, req.agencyId, req.user);
   return new ApiResponse(200, 'Policy deleted successfully').send(res);

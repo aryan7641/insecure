@@ -14,6 +14,7 @@ router.get('/', insurancePolicyController.list);
 
 router.get('/:policyId', checkResourceAccess('policy'), insurancePolicyController.getById);
 router.put('/:policyId', checkResourceAccess('policy'), insurancePolicyController.update);
+router.post('/:policyId/renew', checkResourceAccess('policy'), insurancePolicyController.renew);
 router.delete('/:policyId', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), insurancePolicyController.delete);
 
 module.exports = router;

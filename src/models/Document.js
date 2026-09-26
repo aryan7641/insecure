@@ -18,17 +18,21 @@ const addSoftDelete = (schema) => {
 const documentSchema = new Schema(
   {
     agencyId: { type: Schema.Types.ObjectId, ref: 'Agency', required: true },
-    customerId: { type: Schema.Types.ObjectId, ref: 'Customer', required: true },
-    category: { type: String, enum: Object.values(DOCUMENT_CATEGORIES), required: true },
+    customerId: { type: Schema.Types.ObjectId, ref: 'Customer' },
+    policyId: { type: Schema.Types.ObjectId, ref: 'InsurancePolicy' },
+    claimId: { type: Schema.Types.ObjectId },
+    category: { type: String, enum: Object.values(DOCUMENT_CATEGORIES), default: DOCUMENT_CATEGORIES.POLICY_DOCUMENT },
     customCategory: String,
     fileName: { type: String, required: true },
     originalName: { type: String, required: true },
     blobUrl: String,
     blobKey: { type: String, required: true },
-    fileType: { type: String, enum: ['pdf', 'jpg', 'png'], required: true },
+    fileType: { type: String, required: true },
     fileSize: { type: Number, required: true },
+    verificationState: { type: String, enum: ['unverified', 'needs_review', 'verified'], default: 'unverified' },
     ocrStatus: { type: String, enum: Object.values(OCR_STATUSES), default: OCR_STATUSES.NOT_APPLICABLE },
     extractedData: { type: Schema.Types.Mixed, default: {} },
+    ocrConfidence: { type: Schema.Types.Mixed, default: {} },
     ocrConfirmed: { type: Boolean, default: false },
     ocrConfirmedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     ocrConfirmedAt: Date,
@@ -40,7 +44,9 @@ const documentSchema = new Schema(
   { timestamps: true }
 );
 
-documentSchema.index({ agencyId: 1, customerId: 1, category: 1 });
+documentSchema.index({ agencyId: 1, customerId: 1 });
+documentSchema.index({ agencyId: 1, policyId: 1 });
+documentSchema.index({ agencyId: 1, blobKey: 1 });
 
 addSoftDelete(documentSchema);
 

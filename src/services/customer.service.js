@@ -66,13 +66,31 @@ exports.list = async (agencyId, filters = {}, user) => {
     query.assignedAgentId = filters.assignedAgentId;
   }
 
-  if (filters.search) {
-    const searchRegex = new RegExp(filters.search, 'i');
+  if (filters.search && filters.search.trim()) {
+    const searchRegex = new RegExp(filters.search.trim(), 'i');
+
+    // Cross-search across policy number, insurer, and vehicle registration number
+    let matchedCustomerIds = [];
+    try {
+      const matchingPolicies = await InsurancePolicy.find({
+        agencyId,
+        isDeleted: false,
+        $or: [
+          { policyNumber: searchRegex },
+          { insuranceCompany: searchRegex },
+          { 'vehicleDetails.registrationNumber': searchRegex }
+        ]
+      }).select('customerId');
+      matchedCustomerIds = matchingPolicies.map(p => p.customerId).filter(Boolean);
+    } catch (e) {}
+
     query.$or = [
       { name: searchRegex },
       { mobile: searchRegex },
       { email: searchRegex },
-      { pan: searchRegex }
+      { pan: searchRegex },
+      { city: searchRegex },
+      { _id: { $in: matchedCustomerIds } }
     ];
   }
 
@@ -84,13 +102,35 @@ exports.list = async (agencyId, filters = {}, user) => {
     .skip(skip)
     .limit(limit);
 
+  // Compute live insurance summaries
+  const customerIds = rawCustomers.map(c => c._id);
+  const allPolicies = await InsurancePolicy.find({
+    customerId: { $in: customerIds },
+    isDeleted: false
+  }).select('customerId status premium');
+
+  const policiesByCustomer = {};
+  for (const pol of allPolicies) {
+    const cId = pol.customerId.toString();
+    if (!policiesByCustomer[cId]) policiesByCustomer[cId] = [];
+    policiesByCustomer[cId].push(pol);
+  }
+
   const customers = rawCustomers.map(c => {
     const obj = c.toJSON ? c.toJSON() : c.toObject();
+    const cId = c._id.toString();
+    const pols = policiesByCustomer[cId] || [];
+    const activePolicies = pols.filter(p => p.status === 'active' || p.status === 'expiring_soon').length;
+    const totalPremium = pols.reduce((sum, p) => sum + (p.premium || 0), 0);
+
     return {
       ...obj,
       assignedAgentName: c.assignedAgentId ? c.assignedAgentId.name : 'Unassigned',
-      insuranceSummary: obj.insuranceSummary || { activePolicies: 0, totalPremium: 0 },
-      mfSummary: obj.mfSummary || { currentPortfolioValue: 0, totalInvested: 0 }
+      insuranceSummary: {
+        totalPolicies: pols.length,
+        activePolicies,
+        totalPremium
+      }
     };
   });
 

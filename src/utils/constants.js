@@ -5,18 +5,54 @@ const USER_STATUS = Object.freeze({ ACTIVE: 'active', INACTIVE: 'inactive', PEND
 const AGENCY_STATUS = Object.freeze({ ACTIVE: 'active', INACTIVE: 'inactive' });
 
 const POLICY_TYPES = Object.freeze({
-  LIFE: 'life', HEALTH: 'health', MOTOR: 'motor',
-  PROPERTY: 'property', TRAVEL: 'travel', OTHER: 'other'
+  HEALTH: 'health',
+  MOTOR: 'motor',
+  LIFE: 'life',
+  TERM: 'term',
+  GENERAL: 'general',
+  TRAVEL: 'travel',
+  HOME: 'home',
+  COMMERCIAL: 'commercial',
+  GROUP: 'group',
+  OTHER: 'other',
+  PROPERTY: 'property' // backward compat
 });
 
 const POLICY_STATUSES = Object.freeze({
-  ACTIVE: 'active', EXPIRING_SOON: 'expiring_soon',
-  EXPIRED: 'expired', RENEWED: 'renewed'
+  ACTIVE: 'active',
+  EXPIRING_SOON: 'expiring_soon',
+  EXPIRED: 'expired',
+  RENEWED: 'renewed'
+});
+
+const EXTRACTION_STATES = Object.freeze({
+  EXTRACTED: 'extracted',
+  NEEDS_REVIEW: 'needs_review',
+  NOT_FOUND: 'not_found'
+});
+
+const RENEWAL_INTERVALS = Object.freeze({
+  DAYS_30: 30,
+  DAYS_15: 15,
+  DAYS_7: 7,
+  DAYS_1: 1,
+  EXPIRY: 0,
+  OVERDUE: -1
+});
+
+const CUSTOMER_TYPES = Object.freeze({
+  INDIVIDUAL: 'individual',
+  CORPORATE: 'corporate',
+  HNI: 'hni',
+  RETAIL: 'retail'
 });
 
 const PREMIUM_FREQUENCIES = Object.freeze({
-  MONTHLY: 'monthly', QUARTERLY: 'quarterly',
-  HALF_YEARLY: 'half_yearly', YEARLY: 'yearly', SINGLE: 'single'
+  MONTHLY: 'monthly',
+  QUARTERLY: 'quarterly',
+  HALF_YEARLY: 'half_yearly',
+  YEARLY: 'yearly',
+  SINGLE: 'single'
 });
 
 const TRANSACTION_TYPES = Object.freeze({
@@ -120,6 +156,9 @@ module.exports = {
   AGENCY_STATUS,
   POLICY_TYPES,
   POLICY_STATUSES,
+  EXTRACTION_STATES,
+  RENEWAL_INTERVALS,
+  CUSTOMER_TYPES,
   PREMIUM_FREQUENCIES,
   TRANSACTION_TYPES,
   SIP_STATUSES,
