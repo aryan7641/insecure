@@ -98,7 +98,7 @@ class InsuranceLlmExtractor {
       result.premium.finalPremium = { ...result.premium.netPremium };
     }
 
-    // If city found in address or customer address, align
+    // If city found in address, refine
     if (!result.customer.city.value && result.customer.address.value) {
       const cityRes = this._extractCity(result.customer.address.value);
       if (cityRes.value) result.customer.city = cityRes;
@@ -123,7 +123,11 @@ class InsuranceLlmExtractor {
     for (const p of patterns) {
       const match = text.match(p);
       if (match && match[1]) {
-        const val = match[1].trim().replace(/\s+/g, ' ');
+        let val = match[1].trim();
+        // Remove trailing keywords if captured on the same line
+        val = val.replace(/\s+(?:Mobile|Phone|Email|Address|Contact|DOB|Pan|City|Pin).*$/i, '').trim();
+        val = val.replace(/\s+/g, ' ');
+
         const isInvalid = invalidWords.some(w => val.toLowerCase() === w || val.toLowerCase().startsWith(w + ' '));
         if (!isInvalid && val.length >= 3 && !/\d/.test(val)) {
           return { value: val, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
@@ -134,13 +138,11 @@ class InsuranceLlmExtractor {
   }
 
   _extractMobile(text) {
-    // Specific mobile keywords
     const match = text.match(/(?:Mobile\s*(?:Number|No)?|Phone\s*(?:No)?|Contact\s*(?:No)?)\s*[:\-–]?\s*(?:\+91[\s\-]?)?([6-9]\d{9})\b/i);
     if (match && match[1]) {
       return { value: match[1], state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
     }
 
-    // Fallback standard 10-digit Indian mobile
     const allMobiles = text.match(/\b([6-9]\d{9})\b/g);
     if (allMobiles) {
       for (const m of allMobiles) {
@@ -168,13 +170,11 @@ class InsuranceLlmExtractor {
   }
 
   _extractPan(text) {
-    // Specific PAN label match first
     const labelMatch = text.match(/(?:PAN\s*(?:No|Number)?)\s*[:\-–]?\s*([A-Z]{5}[0-9]{4}[A-Z])/i);
     if (labelMatch && labelMatch[1]) {
       return { value: labelMatch[1].toUpperCase(), state: EXTRACTION_STATES.EXTRACTED, confidence: 0.98 };
     }
 
-    // Regex match
     const match = text.match(/\b([A-Z]{5}[0-9]{4}[A-Z])\b/);
     if (match && match[1]) {
       return { value: match[1].toUpperCase(), state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
@@ -226,7 +226,7 @@ class InsuranceLlmExtractor {
       if (match && match[1]) {
         let addr = match[1].replace(/Policyholder.*$/i, '').trim();
         if (addr.length >= 8 && !addr.toLowerCase().startsWith('registered office')) {
-          return { value: addr, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.88 };
+          return { value: addr.replace(/\n+/g, ', '), state: EXTRACTION_STATES.EXTRACTED, confidence: 0.88 };
         }
       }
     }
@@ -234,7 +234,6 @@ class InsuranceLlmExtractor {
   }
 
   _extractCity(text) {
-    // Check specific line mentioning Jaipur, Mumbai, etc.
     const cities = [
       'Jaipur', 'Mumbai', 'Delhi', 'New Delhi', 'Bangalore', 'Bengaluru', 'Hyderabad', 
       'Ahmedabad', 'Chennai', 'Kolkata', 'Surat', 'Pune', 'Lucknow', 'Kanpur', 'Nagpur', 
@@ -243,7 +242,6 @@ class InsuranceLlmExtractor {
       'Coimbatore', 'Jodhpur', 'Raipur', 'Kota', 'Guwahati', 'Chandigarh', 'Noida', 'Gurugram', 'Gurgaon'
     ];
 
-    // Priority: address block city match
     for (const city of cities) {
       if (new RegExp(`\\b${city}\\b`, 'i').test(text)) {
         return { value: city, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.9 };
@@ -268,21 +266,9 @@ class InsuranceLlmExtractor {
   }
 
   _extractPincode(text) {
-    // Check pincodes
-    const patterns = [
-      /(?:Rajasthan|Maharashtra|Delhi|Gujarat|UP|Haryana|Karnataka)\s*([1-9][0-9]{5})\b/i,
-      /(?:pincode|pin\s*code|pin)\s*[:\-–]?\s*([1-9][0-9]{5})\b/i,
-      /\b([1-9][0-9]{5})\b/g
-    ];
-
-    for (const p of patterns) {
-      const match = text.match(p);
-      if (match) {
-        const pin = Array.isArray(match) ? match[1] || match[0] : match[1];
-        if (pin && pin.length === 6 && !pin.startsWith('1800') && !pin.startsWith('108')) {
-          return { value: pin, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.9 };
-        }
-      }
+    const match = text.match(/\b([1-9][0-9]{5})\b/);
+    if (match && match[1]) {
+      return { value: match[1], state: EXTRACTION_STATES.EXTRACTED, confidence: 0.9 };
     }
     return { value: null, state: EXTRACTION_STATES.NOT_FOUND, confidence: 0 };
   }
@@ -323,12 +309,11 @@ class InsuranceLlmExtractor {
 
   _extractProduct(text) {
     const patterns = [
-      /(?:Product\s*Name)\s*[:\-–]?\s*([^\n\r\t]{3,40})/i,
+      /(?:Product\s*Name)\s*[:\-–\t]?\s*([^\n\r\t]{3,40})/i,
       /(TATA AIG MediCare\s*\w*)/i,
       /(HDFC ERGO Optima\s*\w*)/i,
       /(Star Comprehensive\s*\w*)/i,
-      /(Care Supreme\s*\w*)/i,
-      /(?:Product|Plan)\s*[:\-–]\s*([A-Za-z0-9\s\-–]{4,40})/i
+      /(Care Supreme\s*\w*)/i
     ];
 
     for (const p of patterns) {
@@ -344,7 +329,7 @@ class InsuranceLlmExtractor {
   }
 
   _extractPlan(text) {
-    const match = text.match(/(?:Plan\s*Type|Plan)\s*[:\-–]?\s*([A-Za-z0-9\s\-–]{3,25})/i);
+    const match = text.match(/(?:Plan\s*Type|Plan)\s*[:\-–\t]?\s*([A-Za-z0-9\s\-–]{3,25})/i);
     if (match && match[1]) {
       const val = match[1].replace(/\t.*/g, '').trim();
       if (val.length >= 3 && !val.toLowerCase().includes('business type')) {
@@ -400,9 +385,6 @@ class InsuranceLlmExtractor {
     if (lower.includes('individual')) {
       return { value: 'Individual Health', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.85 };
     }
-    if (lower.includes('comprehensive')) {
-      return { value: 'Comprehensive', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.85 };
-    }
     return { value: 'Comprehensive', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.75 };
   }
 
@@ -456,7 +438,7 @@ class InsuranceLlmExtractor {
 
   _extractSumAssured(text) {
     const patterns = [
-      /(?:Sum Insured[#\s]*\(₹\)|Sum Insured|Sum Assured)\s*[:\-–]?\s*(?:₹|Rs\.?)?\s*([0-9,]{5,12})/i,
+      /(?:Sum Insured[#\s]*\(₹\)|Sum Insured|Sum Assured)\s*[:\-–\t]?\s*(?:₹|Rs\.?)?\s*([0-9,]{5,12})/i,
       /(?:Coverage Limit)\s*[:\-–]?\s*([0-9,]{5,12})/i
     ];
     for (const p of patterns) {
@@ -472,10 +454,17 @@ class InsuranceLlmExtractor {
   }
 
   _extractBasicPremium(text) {
-    const match = text.match(/(?:Total\s*Base\s*Premium|Basic\s*Premium)\s*(?:\(₹\))?\s*[:\-–]?\s*(?:₹|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{2})?)/i);
+    const match = text.match(/(?:Total\s*Base\s*Premium|Basic\s*Premium)\s*(?:\(₹\))?\s*[:\-–\t]?\s*(?:₹|Rs\.?)?\s*([0-9,]+(?:\.[0-9]{2})?)/i);
     if (match && match[1]) {
       const num = parseFloat(match[1].replace(/,/g, ''));
       if (!isNaN(num)) return { value: num, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.92 };
+    }
+
+    // Table match: Total Base Premium ... \n 26671
+    const tableMatch = text.match(/Total Base\s*Premium[^\n]*\n([0-9\.]+)/i);
+    if (tableMatch && tableMatch[1]) {
+      const num = parseFloat(tableMatch[1]);
+      if (!isNaN(num)) return { value: num, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
     }
     return { value: null, state: EXTRACTION_STATES.NOT_FOUND, confidence: 0 };
   }
@@ -577,17 +566,18 @@ class InsuranceLlmExtractor {
     const members = [];
     
     // Check specific table patterns for Tata AIG / Star Health / HDFC
-    // Pattern: Name DOB Age Relationship
+    // e.g. IDV00351242201036 Kamal Sharma 23/09/2026 28/10/1989 36 Self
     const memberRegex = /(?:IDV\d+|MEM\d+)?\s*([A-Za-z\s]{3,30})\s*(?:\d{2}\/\d{2}\/\d{4})?\s*([0-3]?\d[\/\-\.][0-1]?\d[\/\-\.]\d{4})\s*(\d{1,3})\s*(Self|Spouse|Wife|Husband|Son\s*\d*|Daughter\s*\d*|Mother|Father)/gi;
 
     let match;
     while ((match = memberRegex.exec(text)) !== null) {
-      const name = match[1].replace(/Insured.*$/i, '').trim();
+      let name = match[1].replace(/Insured.*$/i, '').trim();
+      name = name.replace(/\s+/g, ' ');
       const dob = match[2];
       const age = parseInt(match[3], 10);
       const relation = match[4].trim();
 
-      if (name && name.length >= 3 && !name.toLowerCase().includes('person')) {
+      if (name && name.length >= 3 && !name.toLowerCase().includes('person') && !name.toLowerCase().includes('details')) {
         members.push({
           name,
           dob: this._parseDateToIso(dob),
@@ -597,9 +587,15 @@ class InsuranceLlmExtractor {
       }
     }
 
-    // If regex found valid members, return them
+    // If regex found valid members, return deduplicated
     if (members.length > 0) {
-      return members;
+      const seen = new Set();
+      return members.filter(m => {
+        const k = m.name.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
     }
 
     // Default primary policyholder
@@ -616,6 +612,15 @@ class InsuranceLlmExtractor {
   }
 
   _extractNomineeName(text) {
+    // Check table format: Nominee Details for Policyholder: \n Nominee Name(s) \t Relationship ... \n SUSHMA RANI \t Wife \t 100
+    const tableMatch = text.match(/(?:Nominee Details|Nominee Name(?:\(s\))?)[^\n]*\n([A-Z\s]{3,35})\t(Wife|Spouse|Husband|Son|Daughter|Mother|Father)/i);
+    if (tableMatch && tableMatch[1]) {
+      const val = tableMatch[1].trim();
+      if (!val.toLowerCase().includes('relationship') && !val.toLowerCase().includes('name')) {
+        return { value: val, state: EXTRACTION_STATES.EXTRACTED, confidence: 0.98 };
+      }
+    }
+
     const patterns = [
       /(?:Nominee\s*Name(?:\(s\))?)\s*[:\-–\t]?\s*([A-Za-z\s\.]{3,35})/i,
       /(?:Nominee)\s*[:\-–]\s*([A-Za-z\s\.]{3,35})/i
@@ -633,6 +638,11 @@ class InsuranceLlmExtractor {
   }
 
   _extractNomineeRelation(text) {
+    const tableMatch = text.match(/(?:Nominee Details|Nominee Name(?:\(s\))?)[^\n]*\n[A-Z\s]{3,35}\t(Wife|Spouse|Husband|Son|Daughter|Mother|Father)/i);
+    if (tableMatch && tableMatch[1]) {
+      return { value: tableMatch[1].trim(), state: EXTRACTION_STATES.EXTRACTED, confidence: 0.98 };
+    }
+
     const match = text.match(/(?:Relationship\s*to\s*Policyholder|Nominee\s*Relation(?:ship)?)\s*[:\-–\t]?\s*(Wife|Spouse|Husband|Son|Daughter|Mother|Father|Brother|Sister)/i);
     if (match && match[1]) {
       return { value: match[1].trim(), state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
