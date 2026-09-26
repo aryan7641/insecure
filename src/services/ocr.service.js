@@ -2,9 +2,12 @@ const Document = require('../models/Document');
 const Customer = require('../models/Customer');
 const InsurancePolicy = require('../models/InsurancePolicy');
 const FollowUp = require('../models/FollowUp');
+const ExtractionJob = require('../models/ExtractionJob');
 const { getStorageProvider } = require('../providers/storage/azureBlobProvider');
 const { getPdfTextExtractor } = require('../providers/ocr/pdfTextExtractor');
 const { getInsuranceLlmExtractor } = require('../providers/llm/insuranceLlmExtractor');
+const { getSubtypeSchema } = require('../schemas/insuranceSubtypeSchemas');
+const { normalizePolicyPayload } = require('./insuranceSchema.service');
 const duplicateDetectionService = require('./duplicateDetection.service');
 const activityService = require('./activity.service');
 const auditLogService = require('./auditLog.service');
@@ -12,9 +15,9 @@ const { NotFoundError, ConflictError, ValidationError } = require('../utils/apiE
 const { OCR_STATUSES, ACTIVITY_TYPES, DOCUMENT_CATEGORIES, FOLLOW_UP_TYPES, FOLLOW_UP_STATUSES, RENEWAL_INTERVALS } = require('../utils/constants');
 
 /**
- * Step 1: Upload Policy PDF -> Store in AWS S3 -> Extract via OCR + LLM -> Duplicate Check -> Return Draft
+ * Step 1: Upload Policy PDF -> Store in AWS S3 -> Classify & Extract via Subtype Schema -> Duplicate Check -> Return Draft
  */
-const extractPolicyPdf = async (agencyId, file, user) => {
+const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) => {
   if (!file || !file.buffer) {
     throw new ValidationError('PDF file buffer is required for extraction');
   }
@@ -45,57 +48,88 @@ const extractPolicyPdf = async (agencyId, file, user) => {
     createdBy: user.userId
   });
 
+  // 3. Create Extraction Job tracker
+  const extractionJob = await ExtractionJob.create({
+    agencyId,
+    documentId: document._id,
+    insuranceSubtype: requestedSubtype || undefined,
+    status: 'classifying',
+    createdBy: user.userId
+  });
+
   try {
-    // 3. Extract text via OCR / PDF extraction provider
+    // 4. Extract text via OCR / PDF extraction provider
     const textExtractor = getPdfTextExtractor();
     const { rawText } = await textExtractor.extractText(file.buffer, fileExt);
+    extractionJob.rawText = rawText ? rawText.slice(0, 10000) : '';
 
-    // 4. Pass text to LLM extraction layer
+    // 5. Pass text to LLM extraction layer with Subtype-Specific Schemas
+    extractionJob.status = 'extracting';
+    await extractionJob.save();
+
     const llmExtractor = getInsuranceLlmExtractor();
-    const extractedData = await llmExtractor.extractInsuranceData(rawText, file.originalname);
+    const extractionResult = await llmExtractor.extractInsuranceData(rawText, file.originalname, requestedSubtype);
 
-    // 5. Perform duplicate detection on potential matches
+    const classification = extractionResult.classification;
+    const finalSubtype = requestedSubtype || classification.effectiveSubtype || 'individual_health';
+    const finalType = classification.effectiveType || 'health';
+
+    // 6. Perform duplicate detection on potential matches
     const customerCriteria = {
-      mobile: extractedData.customer?.mobile?.value,
-      email: extractedData.customer?.email?.value,
-      pan: extractedData.customer?.pan?.value,
-      name: extractedData.customer?.name?.value,
-      dob: extractedData.customer?.dob?.value
+      mobile: extractionResult.customer?.mobile?.value,
+      email: extractionResult.customer?.email?.value,
+      pan: extractionResult.customer?.pan?.value,
+      name: extractionResult.customer?.name?.value,
+      dob: extractionResult.customer?.dob?.value
     };
     const customerMatches = await duplicateDetectionService.findDuplicates(agencyId, customerCriteria);
 
     let policyMatches = [];
-    if (extractedData.policy?.policyNumber?.value) {
+    if (extractionResult.policy?.policyNumber?.value) {
       policyMatches = await InsurancePolicy.find({
         agencyId,
-        policyNumber: extractedData.policy.policyNumber.value,
+        policyNumber: extractionResult.policy.policyNumber.value,
         isDeleted: false
       }).populate('customerId', 'name mobile email');
     }
 
-    // 6. Update document with structured draft results
-    document.extractedData = extractedData;
+    // 7. Update document and job records
+    document.extractedData = extractionResult;
     document.ocrConfidence = {
-      customer: extractedData.customer?.name?.confidence || 0.8,
-      policyNumber: extractedData.policy?.policyNumber?.confidence || 0.85,
-      premium: extractedData.premium?.finalPremium?.confidence || 0.85
+      customer: extractionResult.customer?.name?.confidence || 0.8,
+      policyNumber: extractionResult.policy?.policyNumber?.confidence || 0.85,
+      premium: extractionResult.premium?.finalPremium?.confidence || 0.85
     };
     document.ocrStatus = OCR_STATUSES.COMPLETED;
     await document.save();
+
+    extractionJob.insuranceType = finalType;
+    extractionJob.insuranceSubtype = finalSubtype;
+    extractionJob.classificationResult = classification;
+    extractionJob.extractedData = extractionResult;
+    extractionJob.confidence = document.ocrConfidence;
+    extractionJob.duplicateCandidates = {
+      customers: customerMatches,
+      policies: policyMatches
+    };
+    extractionJob.status = 'review_required';
+    await extractionJob.save();
 
     if (activityService && activityService.logActivity) {
       await activityService.logActivity(agencyId, ACTIVITY_TYPES.OCR_COMPLETED, {
         documentId: document._id,
         performedBy: user.userId,
-        description: `Extracted policy data from ${document.fileName}`
+        description: `Extracted ${classification.subtypeName || finalSubtype} policy data from ${document.fileName}`
       });
     }
 
     return {
       documentId: document._id,
+      jobId: extractionJob._id,
       blobUrl: document.blobUrl,
       fileName: document.fileName,
-      extractedData,
+      classification,
+      extractedData: extractionResult,
       duplicateCandidates: {
         customers: customerMatches,
         policies: policyMatches
@@ -104,12 +138,72 @@ const extractPolicyPdf = async (agencyId, file, user) => {
   } catch (err) {
     document.ocrStatus = OCR_STATUSES.FAILED;
     await document.save();
+
+    extractionJob.status = 'failed';
+    extractionJob.error = err.message;
+    await extractionJob.save();
+
     throw err;
   }
 };
 
 /**
- * Step 2: Agent Human Verification & Confirmation -> Save Customer & Policy -> Attach S3 PDF
+ * Re-extract an existing document with a newly selected subtype
+ */
+const reExtractWithSubtype = async (agencyId, docId, requestedSubtype, user) => {
+  const document = await Document.findOne({ _id: docId, agencyId, isDeleted: false });
+  if (!document) throw new NotFoundError('Document record not found');
+
+  const existingJob = await ExtractionJob.findOne({ documentId: docId, agencyId });
+  const rawText = existingJob?.rawText || '';
+
+  const llmExtractor = getInsuranceLlmExtractor();
+  const extractionResult = await llmExtractor.extractInsuranceData(rawText, document.fileName, requestedSubtype);
+
+  const customerCriteria = {
+    mobile: extractionResult.customer?.mobile?.value,
+    email: extractionResult.customer?.email?.value,
+    pan: extractionResult.customer?.pan?.value,
+    name: extractionResult.customer?.name?.value,
+    dob: extractionResult.customer?.dob?.value
+  };
+  const customerMatches = await duplicateDetectionService.findDuplicates(agencyId, customerCriteria);
+
+  let policyMatches = [];
+  if (extractionResult.policy?.policyNumber?.value) {
+    policyMatches = await InsurancePolicy.find({
+      agencyId,
+      policyNumber: extractionResult.policy.policyNumber.value,
+      isDeleted: false
+    }).populate('customerId', 'name mobile email');
+  }
+
+  document.extractedData = extractionResult;
+  await document.save();
+
+  if (existingJob) {
+    existingJob.insuranceSubtype = requestedSubtype;
+    existingJob.extractedData = extractionResult;
+    existingJob.status = 'review_required';
+    await existingJob.save();
+  }
+
+  return {
+    documentId: document._id,
+    jobId: existingJob?._id,
+    blobUrl: document.blobUrl,
+    fileName: document.fileName,
+    classification: extractionResult.classification,
+    extractedData: extractionResult,
+    duplicateCandidates: {
+      customers: customerMatches,
+      policies: policyMatches
+    }
+  };
+};
+
+/**
+ * Step 2: Agent Human Verification & Confirmation -> Save Customer & Subtype Policy -> Attach S3 PDF
  */
 const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) => {
   if (!confirmationPayload) {
@@ -123,7 +217,8 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     customerAction = 'create_new', // 'create_new' | 'attach_existing' | 'update_existing'
     existingCustomerId,
     customerData = {},
-    policyData = {}
+    policyData = {},
+    subtype = 'individual_health'
   } = confirmationPayload;
 
   let customer;
@@ -192,8 +287,11 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     }
   }
 
-  // 2. Validate & Create Policy
-  const policyNum = (policyData.policyNumber || '').trim();
+  // 2. Normalize and Validate Policy with Subtype Schema
+  const finalSubtype = confirmationPayload.insuranceSubtype || policyData.insuranceSubtype || subtype || 'individual_health';
+  const normalized = normalizePolicyPayload(confirmationPayload, finalSubtype);
+
+  const policyNum = (normalized.policy.policyNumber || policyData.policyNumber || '').trim();
   if (!policyNum) {
     throw new ValidationError('Policy Number is required');
   }
@@ -207,32 +305,38 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     agencyId,
     customerId: customer._id,
     assignedAgentId: customer.assignedAgentId || user.userId,
-    insuranceCompany: policyData.insurer || policyData.insuranceCompany || 'General Insurer',
-    productName: policyData.productName || undefined,
-    planName: policyData.planName || undefined,
+    insuranceCompany: normalized.policy.insuranceCompany || policyData.insurer || policyData.insuranceCompany || 'General Insurer',
+    productName: normalized.policy.productName || undefined,
+    planName: normalized.policy.planName || undefined,
     policyNumber: policyNum,
-    policyType: (policyData.policyType || 'health').toLowerCase(),
-    lob: policyData.lob || undefined,
-    subLob: policyData.subLob || undefined,
-    businessType: policyData.businessType || 'new',
-    issueDate: policyData.issueDate || undefined,
-    startDate: policyData.startDate || undefined,
-    endDate: policyData.endDate || undefined,
-    renewalDate: policyData.renewalDate || policyData.endDate || undefined,
-    tenureYears: policyData.tenureYears ? Number(policyData.tenureYears) : 1,
-    sumAssured: Number(policyData.sumAssured || 0) || undefined,
-    basicPremium: Number(policyData.basicPremium || 0) || undefined,
-    addonPremium: Number(policyData.addonPremium || 0) || undefined,
-    gst: Number(policyData.gst || 0) || undefined,
-    netPremium: Number(policyData.netPremium || 0) || undefined,
-    premium: Number(policyData.finalPremium || policyData.premium || 0),
-    installmentAmount: Number(policyData.installmentAmount || 0) || undefined,
-    premiumFrequency: policyData.premiumFrequency || 'yearly',
-    vehicleDetails: policyData.vehicleDetails || undefined,
-    insuredMembers: Array.isArray(policyData.insuredMembers) ? policyData.insuredMembers : [],
-    nominee: policyData.nominee || undefined,
-    commission: policyData.commission || undefined,
-    notes: policyData.notes || undefined,
+    insuranceType: normalized.insuranceType,
+    insuranceSubtype: normalized.insuranceSubtype,
+    policyType: normalized.policyType,
+    lob: normalized.lob,
+    subLob: normalized.subLob,
+    businessType: normalized.policy.businessType || 'new',
+    issueDate: normalized.policy.issueDate || undefined,
+    startDate: normalized.policy.startDate || undefined,
+    endDate: normalized.policy.endDate || undefined,
+    renewalDate: normalized.policy.renewalDate || normalized.policy.endDate || undefined,
+    tenureYears: normalized.policy.tenureYears || 1,
+    sumAssured: normalized.policy.sumAssured || undefined,
+    coverageDetails: normalized.coverageDetails || {},
+    healthDetails: confirmationPayload.healthDetails || normalized.coverageDetails?.healthDetails || undefined,
+    lifeDetails: confirmationPayload.lifeDetails || normalized.coverageDetails?.lifeDetails || undefined,
+    travelDetails: confirmationPayload.travelDetails || normalized.coverageDetails?.travelDetails || undefined,
+    propertyDetails: confirmationPayload.propertyDetails || normalized.coverageDetails?.propertyDetails || undefined,
+    basicPremium: normalized.premium.basicPremium || undefined,
+    addonPremium: normalized.premium.addonPremium || undefined,
+    gst: normalized.premium.gst || undefined,
+    netPremium: normalized.premium.netPremium || undefined,
+    premium: normalized.premium.premium,
+    installmentAmount: normalized.premium.installmentAmount || undefined,
+    premiumFrequency: normalized.premium.premiumFrequency || 'yearly',
+    vehicleDetails: normalized.vehicleDetails || undefined,
+    insuredMembers: normalized.insuredMembers || [],
+    nominee: normalized.nominee || undefined,
+    notes: confirmationPayload.notes || policyData.notes || undefined,
     documentId: document._id,
     originalDocumentUrl: document.blobUrl,
     status: policyData.status || 'active',
@@ -247,6 +351,16 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
   document.ocrConfirmedBy = user.userId;
   document.ocrConfirmedAt = new Date();
   await document.save();
+
+  // Update extraction job as confirmed
+  await ExtractionJob.updateOne(
+    { documentId: document._id, agencyId },
+    {
+      status: 'confirmed',
+      confirmedPolicyId: newPolicy._id,
+      confirmedCustomerId: customer._id
+    }
+  );
 
   // 4. Automatically generate Renewal Reminder follow-ups if renewalDate is available
   if (newPolicy.renewalDate) {
@@ -263,7 +377,7 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
       policyId: newPolicy._id,
       customerId: customer._id,
       performedBy: user.userId,
-      description: `Policy ${newPolicy.policyNumber} created from verified PDF extraction`
+      description: `Policy ${newPolicy.policyNumber} (${newPolicy.subLob || newPolicy.insuranceSubtype}) created from verified PDF extraction`
     });
   }
 
@@ -310,11 +424,14 @@ const getResult = async (docId, agencyId) => {
   const document = await Document.findOne({ _id: docId, agencyId, isDeleted: false });
   if (!document) throw new NotFoundError('Document not found');
 
+  const job = await ExtractionJob.findOne({ documentId: docId, agencyId });
+
   return {
     documentId: document._id,
     fileName: document.fileName,
     blobUrl: document.blobUrl,
     extractedData: document.extractedData,
+    classification: job?.classificationResult,
     ocrStatus: document.ocrStatus,
     verificationState: document.verificationState,
     ocrConfirmed: document.ocrConfirmed
@@ -323,6 +440,7 @@ const getResult = async (docId, agencyId) => {
 
 module.exports = {
   extractPolicyPdf,
+  reExtractWithSubtype,
   confirmPolicyFromOcr,
   getResult
 };

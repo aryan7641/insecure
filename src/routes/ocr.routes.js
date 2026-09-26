@@ -7,14 +7,18 @@ const { uploadDocument } = require('../middleware/upload');
 router.use(authenticate);
 router.use(setAgencyContext);
 
-// 1. Upload Policy PDF & extract structured draft with OCR + LLM
+// 1. Upload Policy PDF & extract structured draft with OCR + LLM Subtype Schema
 router.post('/extract-pdf', uploadDocument.single('file'), ocrController.extractPolicyPdf);
 router.post('/extract', uploadDocument.single('file'), ocrController.extractPolicyPdf);
 
-// 2. Retrieve extracted result for human verification
+// 2. Re-extract with an explicitly selected subtype
+router.post('/re-extract/:docId', ocrController.reExtractWithSubtype);
+router.post('/:docId/re-extract', ocrController.reExtractWithSubtype);
+
+// 3. Retrieve extracted result for human verification
 router.get('/:docId/result', ocrController.getResult);
 
-// 3. Confirm agent-reviewed data, commit Customer & Policy to database
+// 4. Confirm agent-reviewed data, commit Customer & Policy to database
 router.post('/:docId/confirm-policy', ocrController.confirmPolicyFromOcr);
 router.post('/:docId/confirm', ocrController.confirmPolicyFromOcr);
 

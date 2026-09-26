@@ -24,7 +24,13 @@ const insurancePolicySchema = new Schema(
     insuranceCompany: { type: String, required: true, trim: true },
     productName: { type: String, trim: true },
     planName: { type: String, trim: true },
-    policyType: { type: String, enum: Object.values(POLICY_TYPES), required: true },
+    
+    // Controlled Taxonomy Architecture
+    insuranceType: { type: String, enum: ['health', 'motor', 'life', 'general', 'other'], default: 'health' },
+    insuranceSubtype: { type: String, trim: true, default: 'individual_health' },
+    
+    // Legacy mapping compatibility
+    policyType: { type: String, trim: true, default: 'health' },
     lob: { type: String, trim: true },
     subLob: { type: String, trim: true },
     businessType: { type: String, enum: ['new', 'renewal', 'rollover', 'portability', 'other'], default: 'new' },
@@ -41,6 +47,63 @@ const insurancePolicySchema = new Schema(
     // Coverage & Sum Assured
     sumAssured: { type: Number, min: 0 },
     coverageDetails: { type: Schema.Types.Mixed, default: {} },
+    
+    // Subtype-Specific Specialized Detail Entities
+    healthDetails: {
+      roomRentLimit: String,
+      icuLimit: String,
+      coPayment: String,
+      deductible: Number,
+      aggregateDeductible: Number,
+      preExistingWaitingPeriod: String,
+      cumulativeBonus: String,
+      restorationBenefit: String,
+      diseaseSpecificLimits: String,
+      maternityCover: Number
+    },
+
+    lifeDetails: {
+      uin: String,
+      policyTermYears: Number,
+      premiumPaymentTermYears: Number,
+      deathBenefit: String,
+      maturityDate: Date,
+      maturityBenefit: String,
+      smokerStatus: String,
+      accidentalDeathRider: Number,
+      criticalIllnessRider: Number,
+      waiverOfPremium: Boolean,
+      fundName: String,
+      fundType: String,
+      unitsHeld: Number,
+      nav: Number,
+      totalFundValue: Number,
+      annuityType: String,
+      annuityAmount: Number,
+      annuityFrequency: String,
+      annuityCommencementDate: Date,
+      childName: String,
+      childDob: Date
+    },
+
+    travelDetails: {
+      passportNumber: String,
+      nationality: String,
+      destinationCountry: String,
+      destinationRegion: String,
+      tripDurationDays: Number,
+      tripType: String,
+      medicalExpensesLimit: String
+    },
+
+    propertyDetails: {
+      propertyAddress: String,
+      propertyType: String,
+      occupancyType: String,
+      builtUpAreaSqFt: Number,
+      buildingSumInsured: Number,
+      contentsSumInsured: Number
+    },
     
     // Premium Breakdown (INR)
     basicPremium: { type: Number, min: 0 },
@@ -77,6 +140,7 @@ const insurancePolicySchema = new Schema(
         age: Number,
         gender: String,
         relationship: String,
+        memberId: String,
         sumInsured: Number
       }
     ],
@@ -123,6 +187,7 @@ const insurancePolicySchema = new Schema(
 insurancePolicySchema.index({ agencyId: 1, policyNumber: 1 }, { unique: true, partialFilterExpression: { isDeleted: { $ne: true } } });
 insurancePolicySchema.index({ agencyId: 1, customerId: 1 });
 insurancePolicySchema.index({ agencyId: 1, renewalDate: 1, status: 1 });
+insurancePolicySchema.index({ agencyId: 1, insuranceType: 1, insuranceSubtype: 1 });
 insurancePolicySchema.index({ agencyId: 1, assignedAgentId: 1 });
 insurancePolicySchema.index({ 'vehicleDetails.registrationNumber': 1 });
 
