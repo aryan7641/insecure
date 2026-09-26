@@ -1,6 +1,6 @@
-let pdfParse;
+let pdfModule;
 try {
-  pdfParse = require('pdf-parse');
+  pdfModule = require('pdf-parse');
 } catch (e) {
   console.warn('[pdfTextExtractor] pdf-parse module not loaded:', e.message);
 }
@@ -17,20 +17,35 @@ class PdfTextExtractor {
       throw new Error('Valid file buffer is required for text extraction');
     }
 
-    if (fileType.toLowerCase().includes('pdf') && pdfParse) {
+    if (fileType.toLowerCase().includes('pdf') && pdfModule) {
       try {
-        const data = await pdfParse(buffer);
-        return {
-          rawText: data.text || '',
-          pageCount: data.numpages || 1,
-          info: data.info || {}
-        };
+        // Support v2 class-based PDFParse
+        if (pdfModule.PDFParse) {
+          const parser = new pdfModule.PDFParse({ data: buffer });
+          await parser.load();
+          const textResult = await parser.getText();
+          return {
+            rawText: textResult.text || '',
+            pageCount: textResult.total || 1,
+            info: {}
+          };
+        }
+        
+        // Support v1 function-based pdfParse
+        if (typeof pdfModule === 'function') {
+          const data = await pdfModule(buffer);
+          return {
+            rawText: data.text || '',
+            pageCount: data.numpages || 1,
+            info: data.info || {}
+          };
+        }
       } catch (err) {
         console.warn('[PdfTextExtractor] Failed to parse PDF text with pdf-parse:', err.message);
       }
     }
 
-    // Fallback: UTF-8 / ASCII inspection
+    // Fallback: UTF-8 inspection
     const rawText = buffer.toString('utf8').replace(/[^\x20-\x7E\n\r\t]/g, ' ');
     return {
       rawText,
