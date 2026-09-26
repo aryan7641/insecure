@@ -4,6 +4,7 @@ const authController = require('../controllers/auth.controller');
 const authenticate = require('../middleware/authenticate');
 
 const router = express.Router();
+router.post('/login', authController.login);
 
 // Google OAuth initiation
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));

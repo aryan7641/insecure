@@ -13,17 +13,37 @@ const { parsePaginationParams, buildPaginationResponse } = require('../utils/pag
 
 exports.create = async (agencyId, data, user) => {
   if (data.mobile) {
-    const existing = await Customer.findOne({ agencyId, mobile: data.mobile, isDeleted: false });
+    const existing = await Customer.findOne({ agencyId, mobile: data.mobile.trim(), isDeleted: false });
     if (existing) {
       throw new ConflictError('Customer with this mobile number already exists', { duplicateId: existing._id });
     }
   }
 
-  const customerData = { ...data, agencyId, createdBy: user.userId };
-  
-  if (user.role === ROLES.AGENT && !customerData.assignedAgentId) {
-    customerData.assignedAgentId = user.userId;
+  let addressObj = {};
+  if (typeof data.address === 'string') {
+    addressObj = { street: data.address, city: '', state: '', pincode: '', country: 'India' };
+  } else if (data.address && typeof data.address === 'object') {
+    addressObj = data.address;
   }
+
+  let nomineeObj = data.nominee;
+  if (!nomineeObj && Array.isArray(data.nominees) && data.nominees.length > 0) {
+    nomineeObj = {
+      name: data.nominees[0].name,
+      relation: data.nominees[0].relation,
+      contact: data.nominees[0].contact
+    };
+  }
+
+  const customerData = {
+    ...data,
+    agencyId,
+    createdBy: user.userId,
+    assignedAgentId: data.assignedAgentId || user.userId,
+    address: addressObj,
+    nominee: nomineeObj,
+    income: Number(data.annualIncome || data.income || 0) || 0
+  };
 
   const customer = await Customer.create(customerData);
 
@@ -37,12 +57,12 @@ exports.create = async (agencyId, data, user) => {
   return customer;
 };
 
-exports.list = async (agencyId, filters, user) => {
+exports.list = async (agencyId, filters = {}, user) => {
   const query = { agencyId, isDeleted: false };
 
-  if (user.role === ROLES.AGENT) {
+  if (user && user.role === ROLES.AGENT) {
     query.assignedAgentId = user.userId;
-  } else if (filters.assignedAgentId) {
+  } else if (filters.assignedAgentId && filters.assignedAgentId !== 'ALL') {
     query.assignedAgentId = filters.assignedAgentId;
   }
 
@@ -51,17 +71,28 @@ exports.list = async (agencyId, filters, user) => {
     query.$or = [
       { name: searchRegex },
       { mobile: searchRegex },
-      { email: searchRegex }
+      { email: searchRegex },
+      { pan: searchRegex }
     ];
   }
 
   const { skip, limit, page } = parsePaginationParams(filters);
   const total = await Customer.countDocuments(query);
-  const customers = await Customer.find(query)
+  const rawCustomers = await Customer.find(query)
     .populate('assignedAgentId', 'name email')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit);
+
+  const customers = rawCustomers.map(c => {
+    const obj = c.toJSON ? c.toJSON() : c.toObject();
+    return {
+      ...obj,
+      assignedAgentName: c.assignedAgentId ? c.assignedAgentId.name : 'Unassigned',
+      insuranceSummary: obj.insuranceSummary || { activePolicies: 0, totalPremium: 0 },
+      mfSummary: obj.mfSummary || { currentPortfolioValue: 0, totalInvested: 0 }
+    };
+  });
 
   return buildPaginationResponse(customers, total, page, limit);
 };

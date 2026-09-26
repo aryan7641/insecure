@@ -6,8 +6,9 @@ const userSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    googleId: { type: String, required: true, unique: true },
-    role: { type: String, enum: Object.values(ROLES), required: true },
+    googleId: { type: String, sparse: true },
+    password: { type: String },
+    role: { type: String, enum: Object.values(ROLES), default: ROLES.AGENT },
     agencies: [
       {
         agencyId: { type: Schema.Types.ObjectId, ref: 'Agency' },

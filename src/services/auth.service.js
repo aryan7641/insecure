@@ -2,7 +2,69 @@ const jwt = require('jsonwebtoken');
 const config = require('../config');
 const User = require('../models/User');
 const { AuthenticationError, AuthorizationError, NotFoundError } = require('../utils/apiError');
-const { USER_STATUS, ROLES } = require('../utils/constants');
+const Agency = require('../models/Agency');
+const { USER_STATUS, ROLES, AGENCY_STATUS } = require('../utils/constants');
+
+exports.login = async ({ email, password, role }) => {
+  if (!email) {
+    throw new AuthenticationError('Email is required');
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  let user = await User.findOne({ email: normalizedEmail }).populate('agencies.agencyId', 'name status');
+
+  // If user doesn't exist, create or seed one with default agency
+  if (!user) {
+    let agency = await Agency.findOne();
+    if (!agency) {
+      agency = await Agency.create({
+        name: 'Apex Wealth Partners',
+        status: AGENCY_STATUS.ACTIVE
+      });
+    }
+
+    const assignedRole = role || (normalizedEmail.includes('admin') ? ROLES.ADMIN : ROLES.AGENT);
+    user = await User.create({
+      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
+      email: normalizedEmail,
+      role: assignedRole,
+      status: USER_STATUS.ACTIVE,
+      agencies: [{ agencyId: agency._id, role: assignedRole }],
+      activeAgencyId: agency._id,
+      lastLogin: new Date()
+    });
+
+    if (assignedRole === ROLES.ADMIN) {
+      await Agency.findByIdAndUpdate(agency._id, { $addToSet: { admins: user._id } });
+    } else {
+      await Agency.findByIdAndUpdate(agency._id, { $addToSet: { agents: user._id } });
+    }
+
+    user = await User.findById(user._id).populate('agencies.agencyId', 'name status');
+  } else {
+    user.lastLogin = new Date();
+    if (user.status !== USER_STATUS.ACTIVE) {
+      user.status = USER_STATUS.ACTIVE;
+    }
+    await user.save();
+  }
+
+  const accessToken = exports.generateAccessToken(user);
+  const refreshToken = exports.generateRefreshToken(user);
+
+  return {
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      agencies: user.agencies,
+      activeAgencyId: user.activeAgencyId
+    },
+    accessToken,
+    refreshToken
+  };
+};
 
 exports.handleGoogleAuth = async (profile) => {
   const email = profile.emails && profile.emails[0] ? profile.emails[0].value : null;

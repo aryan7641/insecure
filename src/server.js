@@ -5,6 +5,9 @@ const connectDB = require('./config/database');
 const startServer = async () => {
   await connectDB();
   
+  const { seedDatabaseIfEmpty } = require('./utils/seeder');
+  await seedDatabaseIfEmpty();
+  
   // Conditionally load scheduler if it exists or stub it
   try {
     const { startScheduler } = require('./jobs/scheduler');

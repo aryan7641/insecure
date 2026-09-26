@@ -2,6 +2,20 @@ const { catchAsync, ApiResponse } = require('../utils/apiResponse');
 const authService = require('../services/auth.service');
 const config = require('../config');
 
+exports.login = catchAsync(async (req, res) => {
+  const { email, password, role } = req.body;
+  const result = await authService.login({ email, password, role });
+  
+  res.cookie('refreshToken', result.refreshToken, {
+    httpOnly: true,
+    secure: config.env === 'production',
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  });
+
+  return new ApiResponse(200, 'Login successful', result).send(res);
+});
+
 exports.googleCallback = catchAsync(async (req, res) => {
   const user = await authService.handleGoogleAuth(req.user);
   
