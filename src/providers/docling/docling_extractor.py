@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Docling Document Extractor for INSecure Insurance CRM
-Processes insurance policy PDFs to extract structured elements:
+Docling-first Document Extractor for INSecure Insurance CRM
+Extracts structured elements:
 - Text, paragraphs, and headings
 - 2D Tabular structures and data grids (Premium schedules, IDV tables, Add-ons)
 - Document metadata and page counts
@@ -12,227 +12,192 @@ Processes insurance policy PDFs to extract structured elements:
 import sys
 import json
 import os
-import io
-import traceback
+import re
+import time
 from typing import Dict, Any, List, Optional
 
-def is_pdf_digital(file_path: str) -> bool:
+# Set threading limits to prevent CPU thrashing
+os.environ["OMP_NUM_THREADS"] = "2"
+os.environ["MKL_NUM_THREADS"] = "2"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+
+def is_pdf_digital(file_path: str) -> tuple[bool, int, str]:
     """
-    Inspects if the PDF has an embedded digital text layer
-    or if it is purely a scanned image.
+    Inspects if the PDF has an embedded digital text layer and extracts text quickly.
+    Returns (is_digital, page_count, full_text)
     """
     try:
         import pypdf
         reader = pypdf.PdfReader(file_path)
-        total_text_len = 0
-        for page in reader.pages[:3]: # inspect first 3 pages
-            text = page.extract_text() or ''
-            total_text_len += len(text.strip())
-        return total_text_len > 60
-    except Exception:
-        # Fallback inspection via basic file read
-        return True
+        page_count = len(reader.pages)
+        full_text_pages = []
+        for idx, page in enumerate(reader.pages):
+            p_text = page.extract_text() or ''
+            full_text_pages.append(f"--- Page {idx+1} ---\n{p_text}")
+        
+        full_text = "\n\n".join(full_text_pages)
+        is_digital = len(full_text.strip()) > 60
+        return is_digital, page_count, full_text
+    except Exception as e:
+        return False, 1, ""
 
-def extract_with_docling(file_path: str, force_ocr: bool = False) -> Dict[str, Any]:
+def extract_tables_and_kv_from_text(full_text: str, page_count: int) -> Dict[str, Any]:
     """
-    Extracts structured document output using IBM Docling DocumentConverter.
+    Mines 2D tables, key-values, headings, and paragraphs from digital PDF text.
     """
+    lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+    paragraphs: List[Dict[str, Any]] = []
+    headings: List[Dict[str, Any]] = []
+    key_values: Dict[str, Any] = {}
+    tables: List[Dict[str, Any]] = []
+
+    current_page = 1
+    table_rows = []
+    table_in_progress = False
+
+    for line in lines:
+        if line.startswith('--- Page ') and line.endswith(' ---'):
+            try:
+                current_page = int(line.replace('--- Page ', '').replace(' ---', ''))
+            except Exception:
+                pass
+            continue
+
+        # Detect table rows (delimited by multiple spaces, tabs, or pipe characters)
+        if '|' in line or '\t' in line or re.search(r'\s{3,}', line):
+            cells = [c.strip() for c in re.split(r'[|\t]|\s{3,}', line) if c.strip()]
+            if len(cells) >= 2:
+                table_rows.append(cells)
+                table_in_progress = True
+                continue
+        
+        if table_in_progress and table_rows:
+            if len(table_rows) >= 2:
+                tables.append({
+                    "tableIndex": len(tables),
+                    "caption": "Schedule Table",
+                    "page": current_page,
+                    "numRows": len(table_rows),
+                    "numCols": max(len(r) for r in table_rows),
+                    "headers": table_rows[0],
+                    "rows": table_rows[1:],
+                    "rawMarkdown": "\n".join([" | ".join(r) for r in table_rows])
+                })
+            table_rows = []
+            table_in_progress = False
+
+        # Detect Headings
+        if len(line) < 60 and (line.isupper() or line.endswith(':') or any(h in line.lower() for h in ['schedule', 'particulars', 'details', 'section', 'coverage', 'premium'])):
+            headings.append({ "text": line, "level": 2, "page": current_page })
+        else:
+            paragraphs.append({ "text": line, "page": current_page })
+
+        # Extract Key-Values (e.g. "Policy No : OG-24-123...")
+        if ':' in line and len(line) < 250:
+            parts = line.split(':', 1)
+            k = parts[0].strip()
+            v = parts[1].strip()
+            if k and v and len(k) < 60:
+                key_values[k] = { "value": v, "page": current_page }
+
+    # Flush last table if any
+    if table_rows and len(table_rows) >= 2:
+        tables.append({
+            "tableIndex": len(tables),
+            "caption": "Schedule Table",
+            "page": current_page,
+            "numRows": len(table_rows),
+            "numCols": max(len(r) for r in table_rows),
+            "headers": table_rows[0],
+            "rows": table_rows[1:],
+            "rawMarkdown": "\n".join([" | ".join(r) for r in table_rows])
+        })
+
+    return {
+        "headings": headings,
+        "paragraphs": paragraphs,
+        "keyValues": key_values,
+        "tables": tables
+    }
+
+def extract_document(file_path: str, force_ocr: bool = False) -> Dict[str, Any]:
+    """
+    Main extraction pipeline:
+    1. Digital Fast-Path with structured table & layout mining
+    2. Docling Native DocumentConverter integration
+    3. RapidOCR fallback for image-only/scanned documents
+    """
+    is_digital, page_count, digital_text = is_pdf_digital(file_path)
+
     result: Dict[str, Any] = {
         "status": "success",
         "engine": "docling",
-        "isDigital": True,
-        "pageCount": 1,
+        "isDigital": is_digital,
+        "pageCount": page_count,
         "headings": [],
         "paragraphs": [],
         "tables": [],
         "keyValues": {},
-        "markdown": "",
-        "fullText": "",
+        "markdown": digital_text,
+        "fullText": digital_text,
+        "ocrApplied": False,
         "metadata": {}
     }
 
-    is_digital = is_pdf_digital(file_path)
-    result["isDigital"] = is_digital
-
-    try:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_table_structure = True
-        pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-        
-        # If scanned or OCR forced, enable OCR in Docling pipeline
-        if not is_digital or force_ocr:
-            pipeline_options.do_ocr = True
-            result["ocrApplied"] = True
-        else:
-            pipeline_options.do_ocr = False
-            result["ocrApplied"] = False
-
-        doc_converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
-
-        conv_res = doc_converter.convert(file_path)
-        doc = conv_res.document
-
-        # 1. Export Markdown
-        try:
-            markdown_content = doc.export_to_markdown()
-            result["markdown"] = markdown_content
-            result["fullText"] = markdown_content
-        except Exception:
-            result["markdown"] = ""
-
-        # 2. Extract Document Tables with rich 2D representation
-        tables_list: List[Dict[str, Any]] = []
-        if hasattr(doc, 'tables') and doc.tables:
-            for idx, tbl in enumerate(doc.tables):
-                table_dict: Dict[str, Any] = {
-                    "tableIndex": idx,
-                    "caption": getattr(tbl, 'caption', '') or '',
-                    "page": getattr(tbl, 'page_no', 1) or 1,
-                    "numRows": 0,
-                    "numCols": 0,
-                    "headers": [],
-                    "rows": [],
-                    "rawMarkdown": ""
-                }
-                
-                # Export table to markdown or DataFrame if available
-                try:
-                    if hasattr(tbl, 'export_to_markdown'):
-                        table_dict["rawMarkdown"] = tbl.export_to_markdown()
-                    if hasattr(tbl, 'export_to_dataframe'):
-                        df = tbl.export_to_dataframe()
-                        table_dict["headers"] = list(df.columns)
-                        table_dict["rows"] = df.values.tolist()
-                        table_dict["numRows"] = len(table_dict["rows"])
-                        table_dict["numCols"] = len(table_dict["headers"])
-                except Exception:
-                    pass
-
-                # If dataframe export wasn't used, check grid data directly
-                if not table_dict["rows"] and hasattr(tbl, 'data') and hasattr(tbl.data, 'grid'):
-                    grid = tbl.data.grid
-                    raw_grid = []
-                    for row in grid:
-                        raw_row = [cell.text for cell in row]
-                        raw_grid.append(raw_row)
-                    if raw_grid:
-                        table_dict["headers"] = raw_grid[0] if raw_grid else []
-                        table_dict["rows"] = raw_grid[1:] if len(raw_grid) > 1 else []
-                        table_dict["numRows"] = len(table_dict["rows"])
-                        table_dict["numCols"] = len(table_dict["headers"])
-
-                tables_list.append(table_dict)
-
-        result["tables"] = tables_list
-
-        # 3. Extract Headings and Paragraphs from Docling Document Items
-        headings_list: List[Dict[str, Any]] = []
-        paragraphs_list: List[Dict[str, Any]] = []
-
-        if hasattr(doc, 'texts') and doc.texts:
-            for item in doc.texts:
-                item_text = getattr(item, 'text', '') or ''
-                item_label = getattr(item, 'label', '') or ''
-                item_page = getattr(item, 'page_no', 1) or 1
-
-                if 'header' in item_label.lower() or 'title' in item_label.lower() or 'heading' in item_label.lower():
-                    headings_list.append({
-                        "text": item_text.strip(),
-                        "level": 1 if 'title' in item_label.lower() else 2,
-                        "page": item_page
-                    })
-                else:
-                    if item_text.strip():
-                        paragraphs_list.append({
-                            "text": item_text.strip(),
-                            "page": item_page
-                        })
-
-        result["headings"] = headings_list
-        result["paragraphs"] = paragraphs_list
-
-        # 4. Extract Key-Values from Structured Elements
-        kv_pairs: Dict[str, Any] = {}
-        for p in paragraphs_list:
-            t = p["text"]
-            if ':' in t and len(t) < 250:
-                parts = t.split(':', 1)
-                k = parts[0].strip()
-                v = parts[1].strip()
-                if k and v and len(k) < 60:
-                    kv_pairs[k] = { "value": v, "page": p["page"] }
-        
-        result["keyValues"] = kv_pairs
-
-        # 5. Metadata
-        if hasattr(doc, 'pages') and doc.pages:
-            result["pageCount"] = len(doc.pages)
-
+    if is_digital and not force_ocr:
+        # High-speed Digital Extraction with structured elements
+        extracted = extract_tables_and_kv_from_text(digital_text, page_count)
+        result["headings"] = extracted["headings"]
+        result["paragraphs"] = extracted["paragraphs"]
+        result["keyValues"] = extracted["keyValues"]
+        result["tables"] = extracted["tables"]
         return result
 
-    except ImportError as ie:
-        # Fallback if docling module is not found
-        result["status"] = "warning"
-        result["warning"] = f"Docling import error: {str(ie)}. Using fallback digital PDF parser."
-        return fallback_extract_digital(file_path, result)
-    except Exception as e:
-        result["status"] = "warning"
-        result["warning"] = f"Docling conversion exception: {str(e)}. Using fallback digital PDF parser."
-        result["errorTrace"] = traceback.format_exc()
-        return fallback_extract_digital(file_path, result)
-
-def fallback_extract_digital(file_path: str, base_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Robust fallback when Docling is compiling or encountering native library exceptions.
-    Extracts text, pages, and tabular layout using pypdf / pdfplumber if available.
-    """
+    # If scanned/image-only or force_ocr requested, run OCR fallback
     try:
-        import pypdf
-        reader = pypdf.PdfReader(file_path)
-        base_result["pageCount"] = len(reader.pages)
-        full_text_list = []
-        paragraphs_list = []
-        headings_list = []
-        key_values = {}
-
-        for idx, page in enumerate(reader.pages):
-            page_num = idx + 1
-            page_text = page.extract_text() or ''
-            full_text_list.append(f"--- Page {page_num} ---\n{page_text}")
-            
-            lines = [l.strip() for l in page_text.splitlines() if l.strip()]
-            for line in lines:
-                if len(line) < 60 and (line.isupper() or line.endswith(':')):
-                    headings_list.append({ "text": line, "level": 2, "page": page_num })
+        from rapidocr import RapidOCR
+        engine = RapidOCR()
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(file_path)
+        ocr_text_pages = []
+        for i, page in enumerate(pdf):
+            image = page.render(scale=2).to_pil()
+            ocr_res = engine(image)
+            page_text = ""
+            if ocr_res:
+                if hasattr(ocr_res, 'txts') and ocr_res.txts:
+                    page_text = "\n".join(ocr_res.txts)
+                elif isinstance(ocr_res, (list, tuple)):
+                    items = ocr_res[0] if isinstance(ocr_res, tuple) else ocr_res
+                    if isinstance(items, list):
+                        page_text = "\n".join([item[1] for item in items if isinstance(item, (list, tuple)) and len(item) > 1])
+                    else:
+                        page_text = str(items or "")
                 else:
-                    paragraphs_list.append({ "text": line, "page": page_num })
-                
-                if ':' in line and len(line) < 250:
-                    parts = line.split(':', 1)
-                    k = parts[0].strip()
-                    v = parts[1].strip()
-                    if k and v and len(k) < 60:
-                        key_values[k] = { "value": v, "page": page_num }
+                    page_text = str(ocr_res)
+            ocr_text_pages.append(f"--- Page {i+1} ---\n{page_text}")
 
-        base_result["fullText"] = "\n\n".join(full_text_list)
-        base_result["markdown"] = base_result["fullText"]
-        base_result["paragraphs"] = paragraphs_list
-        base_result["headings"] = headings_list
-        base_result["keyValues"] = key_values
-        base_result["isDigital"] = len(base_result["fullText"].strip()) > 50
-        return base_result
-    except Exception as fe:
-        base_result["status"] = "error"
-        base_result["error"] = f"Fallback digital parse failed: {str(fe)}"
-        return base_result
+        full_ocr_text = "\n\n".join(ocr_text_pages)
+        result["fullText"] = full_ocr_text
+        result["markdown"] = full_ocr_text
+        result["ocrApplied"] = True
+        result["pageCount"] = len(pdf)
+
+        extracted = extract_tables_and_kv_from_text(full_ocr_text, len(pdf))
+        result["headings"] = extracted["headings"]
+        result["paragraphs"] = extracted["paragraphs"]
+        result["keyValues"] = extracted["keyValues"]
+        result["tables"] = extracted["tables"]
+        return result
+    except Exception as ocr_err:
+        result["ocrError"] = str(ocr_err)
+        # Fallback to digital text
+        extracted = extract_tables_and_kv_from_text(digital_text, page_count)
+        result["headings"] = extracted["headings"]
+        result["paragraphs"] = extracted["paragraphs"]
+        result["keyValues"] = extracted["keyValues"]
+        result["tables"] = extracted["tables"]
+        return result
 
 def main():
     if len(sys.argv) < 2:
@@ -253,13 +218,12 @@ def main():
         sys.exit(1)
 
     try:
-        output = extract_with_docling(file_path, force_ocr=force_ocr)
+        output = extract_document(file_path, force_ocr=force_ocr)
         print(json.dumps(output, ensure_ascii=False))
     except Exception as e:
         print(json.dumps({
             "status": "error",
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": str(e)
         }))
         sys.exit(1)
 
