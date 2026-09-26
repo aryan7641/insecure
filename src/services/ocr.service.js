@@ -4,7 +4,8 @@ const InsurancePolicy = require('../models/InsurancePolicy');
 const FollowUp = require('../models/FollowUp');
 const ExtractionJob = require('../models/ExtractionJob');
 const { getStorageProvider } = require('../providers/storage/azureBlobProvider');
-const { getPdfTextExtractor } = require('../providers/ocr/pdfTextExtractor');
+const { getDoclingProvider } = require('../providers/docling/doclingProvider');
+const { getDoclingInsuranceParser } = require('../providers/docling/doclingInsuranceParser');
 const { getInsuranceLlmExtractor } = require('../providers/llm/insuranceLlmExtractor');
 const { getSubtypeSchema } = require('../schemas/insuranceSubtypeSchemas');
 const { normalizePolicyPayload } = require('./insuranceSchema.service');
@@ -15,7 +16,7 @@ const { NotFoundError, ConflictError, ValidationError } = require('../utils/apiE
 const { OCR_STATUSES, ACTIVITY_TYPES, DOCUMENT_CATEGORIES, FOLLOW_UP_TYPES, FOLLOW_UP_STATUSES, RENEWAL_INTERVALS } = require('../utils/constants');
 
 /**
- * Step 1: Upload Policy PDF -> Store in AWS S3 -> Classify & Extract via Subtype Schema -> Duplicate Check -> Return Draft
+ * Step 1: Upload Policy PDF -> Store in AWS S3 -> Docling Structured Extraction -> Classify & Subtype Schema -> Duplicate Check -> Return Draft
  */
 const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) => {
   if (!file || !file.buffer) {
@@ -58,21 +59,82 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
   });
 
   try {
-    // 4. Extract text via OCR / PDF extraction provider
-    const textExtractor = getPdfTextExtractor();
-    const { rawText } = await textExtractor.extractText(file.buffer, fileExt);
-    extractionJob.rawText = rawText ? rawText.slice(0, 10000) : '';
-
-    // 5. Pass text to LLM extraction layer with Subtype-Specific Schemas
+    // 4. Primary Extraction: Docling Structured Document Extraction (Text + Tables + Structure)
+    const doclingProvider = getDoclingProvider();
+    const doclingResult = await doclingProvider.extractStructuredDocument(file.buffer, file.originalname);
+    
+    extractionJob.rawText = (doclingResult.fullText || doclingResult.markdown || '').slice(0, 10000);
     extractionJob.status = 'extracting';
     await extractionJob.save();
 
+    // 5. Docling Domain Parser with 2D Tabular & Key-Value spatial mining
+    const doclingParser = getDoclingInsuranceParser();
+    let extractionResult = doclingParser.parse(doclingResult, file.originalname, requestedSubtype);
+
+    // Complement with deep regex subtype extractor if any fields can be further enriched
     const llmExtractor = getInsuranceLlmExtractor();
-    const extractionResult = await llmExtractor.extractInsuranceData(rawText, file.originalname, requestedSubtype);
+    const regexEnrichment = await llmExtractor.extractInsuranceData(doclingResult.fullText || doclingResult.markdown, file.originalname, requestedSubtype);
+    
+    // Merge results, prioritizing Docling high-confidence extracted fields
+    if (regexEnrichment) {
+      if (!extractionResult.customer?.name?.value && regexEnrichment.customer?.name?.value) {
+        extractionResult.customer.name = regexEnrichment.customer.name;
+      }
+      if (!extractionResult.customer?.mobile?.value && regexEnrichment.customer?.mobile?.value) {
+        extractionResult.customer.mobile = regexEnrichment.customer.mobile;
+      }
+      if (!extractionResult.customer?.email?.value && regexEnrichment.customer?.email?.value) {
+        extractionResult.customer.email = regexEnrichment.customer.email;
+      }
+      if (!extractionResult.customer?.pan?.value && regexEnrichment.customer?.pan?.value) {
+        extractionResult.customer.pan = regexEnrichment.customer.pan;
+      }
+      if (!extractionResult.policy?.policyNumber?.value && regexEnrichment.policy?.policyNumber?.value) {
+        extractionResult.policy.policyNumber = regexEnrichment.policy.policyNumber;
+      }
+      if (extractionResult.motor && regexEnrichment.motor) {
+        if (!extractionResult.motor.registrationNumber?.value && regexEnrichment.motor.registrationNumber?.value) {
+          extractionResult.motor.registrationNumber = regexEnrichment.motor.registrationNumber;
+        }
+        if (!extractionResult.motor.engineNumber?.value && regexEnrichment.motor.engineNumber?.value) {
+          extractionResult.motor.engineNumber = regexEnrichment.motor.engineNumber;
+        }
+        if (!extractionResult.motor.chassisNumber?.value && regexEnrichment.motor.chassisNumber?.value) {
+          extractionResult.motor.chassisNumber = regexEnrichment.motor.chassisNumber;
+        }
+        if (!extractionResult.motor.idv?.value && regexEnrichment.motor.idv?.value) {
+          extractionResult.motor.idv = regexEnrichment.motor.idv;
+        }
+        // Merge comprehensive sub-fields
+        extractionResult.motor = {
+          ...regexEnrichment.motor,
+          ...extractionResult.motor,
+          // Preserve high-confidence docling values
+          registrationNumber: extractionResult.motor.registrationNumber?.value ? extractionResult.motor.registrationNumber : regexEnrichment.motor.registrationNumber,
+          engineNumber: extractionResult.motor.engineNumber?.value ? extractionResult.motor.engineNumber : regexEnrichment.motor.engineNumber,
+          chassisNumber: extractionResult.motor.chassisNumber?.value ? extractionResult.motor.chassisNumber : regexEnrichment.motor.chassisNumber,
+          idv: extractionResult.motor.idv?.value ? extractionResult.motor.idv : regexEnrichment.motor.idv
+        };
+      }
+      if (extractionResult.premium && regexEnrichment.premium) {
+        if (!extractionResult.premium.finalPremium?.value && regexEnrichment.premium.finalPremium?.value) {
+          extractionResult.premium.finalPremium = regexEnrichment.premium.finalPremium;
+        }
+        if (!extractionResult.premium.basicPremium?.value && regexEnrichment.premium.basicPremium?.value) {
+          extractionResult.premium.basicPremium = regexEnrichment.premium.basicPremium;
+        }
+      }
+      if (regexEnrichment.brokerDetails && !extractionResult.brokerDetails?.agentCode?.value) {
+        extractionResult.brokerDetails = regexEnrichment.brokerDetails;
+      }
+      if (regexEnrichment.paymentDetails && !extractionResult.paymentDetails?.transactionReference?.value) {
+        extractionResult.paymentDetails = regexEnrichment.paymentDetails;
+      }
+    }
 
     const classification = extractionResult.classification;
-    const finalSubtype = requestedSubtype || classification.effectiveSubtype || 'individual_health';
-    const finalType = classification.effectiveType || 'health';
+    const finalSubtype = requestedSubtype || classification.effectiveSubtype || 'car';
+    const finalType = classification.effectiveType || 'motor';
 
     // 6. Perform duplicate detection on potential matches
     const customerCriteria = {
@@ -96,9 +158,9 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
     // 7. Update document and job records
     document.extractedData = extractionResult;
     document.ocrConfidence = {
-      customer: extractionResult.customer?.name?.confidence || 0.8,
-      policyNumber: extractionResult.policy?.policyNumber?.confidence || 0.85,
-      premium: extractionResult.premium?.finalPremium?.confidence || 0.85
+      customer: extractionResult.customer?.name?.confidence || 0.85,
+      policyNumber: extractionResult.policy?.policyNumber?.confidence || 0.90,
+      premium: extractionResult.premium?.finalPremium?.confidence || 0.90
     };
     document.ocrStatus = OCR_STATUSES.COMPLETED;
     await document.save();
@@ -119,7 +181,7 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
       await activityService.logActivity(agencyId, ACTIVITY_TYPES.OCR_COMPLETED, {
         documentId: document._id,
         performedBy: user.userId,
-        description: `Extracted ${classification.subtypeName || finalSubtype} policy data from ${document.fileName}`
+        description: `Docling extracted ${classification.subtypeName || finalSubtype} policy data from ${document.fileName}`
       });
     }
 
