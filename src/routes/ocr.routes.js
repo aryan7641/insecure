@@ -18,8 +18,12 @@ router.post('/:docId/re-extract', ocrController.reExtractWithSubtype);
 // 3. Retrieve extracted result for human verification
 router.get('/:docId/result', ocrController.getResult);
 
-// 4. Confirm agent-reviewed data, commit Customer & Policy to database
+// 4. Generate short-lived presigned S3 URL for secure in-browser PDF viewing (no bucket ACL change needed)
+router.get('/:docId/view-url', ocrController.getViewUrl);
+
+// 5. Confirm agent-reviewed data, commit Customer & Policy to database
 router.post('/:docId/confirm-policy', ocrController.confirmPolicyFromOcr);
 router.post('/:docId/confirm', ocrController.confirmPolicyFromOcr);
 
 module.exports = router;
+
