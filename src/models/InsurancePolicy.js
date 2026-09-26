@@ -114,22 +114,126 @@ const insurancePolicySchema = new Schema(
     installmentAmount: { type: Number, min: 0 },
     premiumFrequency: { type: String, enum: Object.values(PREMIUM_FREQUENCIES), default: PREMIUM_FREQUENCIES.YEARLY },
     
-    // Motor Insurance Specific Details
+    // Motor Insurance Specific Details (Expanded Schema)
     vehicleDetails: {
       registrationNumber: { type: String, uppercase: true, trim: true },
-      vehicleType: { type: String, trim: true }, // 2-Wheeler, 4-Wheeler Private, Commercial, etc.
+      vehicleType: { type: String, trim: true }, // e.g. Private Car, Two-Wheeler, Commercial Vehicle
+      vehicleCategory: { type: String, trim: true }, // e.g. Private Car, Two Wheeler, Goods Carrier, Passenger Carrier, Miscellaneous
+      businessType: { type: String, trim: true },
       make: { type: String, trim: true },
       model: { type: String, trim: true },
       variant: { type: String, trim: true },
+      subModel: { type: String, trim: true },
       fuelType: { type: String, trim: true },
+      cubicCapacity: Number,
+      seatingCapacity: Number,
+      numberOfTyres: Number,
+      vehicleColor: { type: String, trim: true },
+      
+      // Registration specifics
       registrationDate: Date,
+      registrationState: { type: String, trim: true },
+      registrationCity: { type: String, trim: true },
+      rtoCode: { type: String, uppercase: true, trim: true },
+      rtoName: { type: String, trim: true },
+      zone: { type: String, trim: true },
+
+      // Manufacturing
+      manufacturingMonth: { type: String, trim: true },
       manufacturingYear: Number,
-      engineNumber: { type: String, trim: true },
-      chassisNumber: { type: String, trim: true },
+      manufacturingDate: Date,
+
+      // Identification
+      engineNumber: { type: String, uppercase: true, trim: true },
+      chassisNumber: { type: String, uppercase: true, trim: true },
+      vinNumber: { type: String, uppercase: true, trim: true },
+      identificationNumber: { type: String, trim: true },
+
+      // Valuation & NCB
       idv: { type: Number, min: 0 },
+      vehicleValue: Number,
       ncb: { type: Number, min: 0, default: 0 },
+      currentNcbPercentage: Number,
+      previousNcbPercentage: Number,
+
+      // Previous Policy
+      previousPolicyAvailable: Boolean,
       previousInsurer: { type: String, trim: true },
-      previousPolicyNumber: { type: String, trim: true }
+      previousPolicyNumber: { type: String, trim: true },
+      previousPolicyStartDate: Date,
+      previousPolicyEndDate: Date,
+      previousPolicyType: { type: String, trim: true },
+      previousNcb: Number,
+      previousIdv: Number,
+
+      // Third Party Policy (for Standalone OD or Multi-year TP)
+      activeTpInsurerName: { type: String, trim: true },
+      activeTpPolicyNumber: { type: String, trim: true },
+      activeTpPolicyStartDate: Date,
+      activeTpPolicyEndDate: Date,
+      tpPremium: Number,
+
+      // Financing & Hypothecation
+      financed: Boolean,
+      financierName: { type: String, trim: true },
+      hypothecation: { type: String, trim: true },
+      loanProvider: { type: String, trim: true },
+
+      // Motor Add-ons & Breakdowns
+      addons: [
+        {
+          name: { type: String, trim: true },
+          selected: { type: Boolean, default: false },
+          premium: Number,
+          status: { type: String, enum: ['included', 'excluded', 'not_detected', 'opted'], default: 'not_detected' }
+        }
+      ],
+      zeroDepreciation: Boolean,
+      engineProtection: Boolean,
+      roadsideAssistance: Boolean,
+      consumables: Boolean,
+      returnToInvoice: Boolean,
+      ncbProtector: Boolean,
+      tyreProtector: Boolean,
+      keyReplacement: Boolean,
+      personalBelongings: Boolean,
+      personalAccidentCover: Boolean
+    },
+
+    // Additional Broker / Agent Info from Document
+    brokerDetails: {
+      brokerAgency: { type: String, trim: true },
+      agentName: { type: String, trim: true },
+      subAgent: { type: String, trim: true },
+      brokerCode: { type: String, trim: true },
+      agentCode: { type: String, trim: true }
+    },
+
+    // Payment Details from Document
+    paymentDetails: {
+      paymentStatus: { type: String, trim: true },
+      paymentMethod: { type: String, trim: true },
+      paymentDate: Date,
+      paymentAmount: Number,
+      transactionReference: { type: String, trim: true },
+      receiptNumber: { type: String, trim: true }
+    },
+
+    // Detailed Premium Breakdown
+    premiumBreakdown: {
+      ownDamagePremium: Number,
+      thirdPartyPremium: Number,
+      personalAccidentPremium: Number,
+      addonPremium: Number,
+      basicPremium: Number,
+      otherPremium: Number,
+      discount: Number,
+      loading: Number,
+      netPremium: Number,
+      gstPercentage: Number,
+      gst: Number,
+      cess: Number,
+      finalPremium: Number
     },
     
     // Insured Members (e.g. Floater / Group / Family Members)
@@ -156,8 +260,12 @@ const insurancePolicySchema = new Schema(
     
     // Advisor / Commission Details
     commission: {
+      type: { type: String, trim: true },
       percentage: Number,
       amount: Number,
+      basicCommission: Number,
+      bonusCommission: Number,
+      totalCommission: Number,
       receivableDate: Date,
       status: { type: String, enum: ['pending', 'received', 'reconciled'], default: 'pending' }
     },
