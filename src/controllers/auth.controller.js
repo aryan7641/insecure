@@ -29,8 +29,9 @@ exports.googleCallback = catchAsync(async (req, res) => {
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   });
 
-  // Redirect to frontend with access token in query param or set in cookie
-  res.redirect(`${config.frontendUrl}/auth/callback?accessToken=${accessToken}`);
+  // Redirect to frontend with access token and active agency ID
+  const agencyId = user.activeAgencyId || (user.agencies && user.agencies[0]?.agencyId) || '';
+  res.redirect(`${config.frontendUrl}/auth/callback?token=${accessToken}&agencyId=${agencyId}`);
 });
 
 exports.refreshToken = catchAsync(async (req, res) => {

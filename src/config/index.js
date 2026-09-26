@@ -19,6 +19,7 @@ const config = {
     containerName: process.env.AZURE_STORAGE_CONTAINER_NAME || 'insecure-documents',
   },
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  frontendUrl: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || 'https://insecure-fr.vercel.app',
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
     max: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),

@@ -67,7 +67,7 @@ exports.login = async ({ email, password, role }) => {
 };
 
 exports.handleGoogleAuth = async (profile) => {
-  const email = profile.emails && profile.emails[0] ? profile.emails[0].value : null;
+  const email = (profile.emails && profile.emails[0] ? profile.emails[0].value : (profile.email || '')).toLowerCase().trim();
   if (!email) {
     throw new AuthenticationError('Google profile does not contain an email');
   }
@@ -76,17 +76,43 @@ exports.handleGoogleAuth = async (profile) => {
 
   if (user) {
     user.lastLogin = new Date();
+    if (profile.id && !user.googleId) user.googleId = profile.id;
+    if (user.status !== USER_STATUS.ACTIVE) user.status = USER_STATUS.ACTIVE;
+
+    // Ensure user has an active agency
+    if (!user.activeAgencyId || !user.agencies || user.agencies.length === 0) {
+      let agency = await Agency.findOne();
+      if (!agency) {
+        agency = await Agency.create({ name: 'Apex Wealth Partners', status: AGENCY_STATUS.ACTIVE });
+      }
+      user.agencies = [{ agencyId: agency._id, role: user.role || ROLES.ADMIN }];
+      user.activeAgencyId = agency._id;
+    }
     await user.save();
     return user;
   }
 
+  let agency = await Agency.findOne();
+  if (!agency) {
+    agency = await Agency.create({
+      name: 'Apex Wealth Partners',
+      status: AGENCY_STATUS.ACTIVE
+    });
+  }
+
+  const role = ROLES.ADMIN;
   user = await User.create({
     email,
-    name: profile.displayName || email.split('@')[0],
+    name: profile.displayName || profile.name || email.split('@')[0],
     googleId: profile.id,
-    role: ROLES.AGENT,
-    status: USER_STATUS.PENDING
+    role,
+    status: USER_STATUS.ACTIVE,
+    agencies: [{ agencyId: agency._id, role }],
+    activeAgencyId: agency._id,
+    lastLogin: new Date()
   });
+
+  await Agency.findByIdAndUpdate(agency._id, { $addToSet: { admins: user._id } });
 
   return user;
 };
