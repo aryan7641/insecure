@@ -6,6 +6,14 @@ const { ROLES, USER_STATUS, AGENCY_STATUS } = require('./constants');
 
 async function seedDatabaseIfEmpty() {
   try {
+    // Drop old non-sparse googleId index if it exists in users collection
+    try {
+      await User.collection.dropIndex('googleId_1');
+      console.log('[Seeder] Dropped legacy non-sparse googleId_1 index');
+    } catch (e) {
+      // index didn't exist or already dropped
+    }
+
     const agencyCount = await Agency.countDocuments();
     let agency;
 
