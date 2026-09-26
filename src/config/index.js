@@ -6,8 +6,8 @@ const config = {
   mongoUri: process.env.MONGODB_URI,
   jwt: {
     secret: process.env.JWT_SECRET,
-    accessExpiry: process.env.JWT_ACCESS_EXPIRY || '15m',
-    refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
+    accessExpiry: process.env.JWT_EXPIRE || process.env.JWT_ACCESS_EXPIRY || '30d',
+    refreshExpiry: process.env.JWT_REFRESH_EXPIRE || process.env.JWT_REFRESH_EXPIRY || '90d',
   },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID,
