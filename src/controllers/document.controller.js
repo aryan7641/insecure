@@ -18,7 +18,8 @@ const list = catchAsync(async (req, res) => {
     category: req.query.category,
   };
   const { documents, total } = await documentService.list(req.agencyId, filters, pagination, req.user);
-  return buildPaginationResponse(res, documents, total, pagination.page, pagination.limit, 'Documents retrieved successfully');
+  const result = buildPaginationResponse(documents, total, pagination.page, pagination.limit);
+  return new ApiResponse(200, 'Documents retrieved successfully', result).send(res);
 });
 
 const getById = catchAsync(async (req, res) => {
