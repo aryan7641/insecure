@@ -411,13 +411,13 @@ class InsuranceLlmExtractor {
   }
 
   _extractGender(text) {
-    if (/\b(?:gender|sex)\s*[:\-–]?\s*(male|m)\b/i.test(text) || /\bmr\.\s+/i.test(text)) {
-      return { value: 'male', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.85 };
+    if (/\b(?:gender|sex)\s*[:\-–]?\s*(male|m)\b/i.test(text)) {
+      return { value: 'male', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
     }
-    if (/\b(?:gender|sex)\s*[:\-–]?\s*(female|f)\b/i.test(text) || /\b(?:mrs\.|ms\.)\s+/i.test(text)) {
-      return { value: 'female', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.85 };
+    if (/\b(?:gender|sex)\s*[:\-–]?\s*(female|f)\b/i.test(text)) {
+      return { value: 'female', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.95 };
     }
-    return { value: 'male', state: EXTRACTION_STATES.EXTRACTED, confidence: 0.7 };
+    return { value: null, state: EXTRACTION_STATES.NOT_FOUND, confidence: 0 };
   }
 
   _extractDob(text) {

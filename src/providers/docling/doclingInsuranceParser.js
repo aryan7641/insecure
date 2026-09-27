@@ -1,11 +1,12 @@
 /**
  * Docling Insurance Parser for INSecure CRM
  * Mines IBM Docling structured outputs (2D tables, section headings, paragraphs, key-values)
- * to produce subtype-specific insurance schema records with document provenance.
+ * and runs validation, normalization, and consistency checks via InsuranceFieldValidator.
  */
 
 const { getInsuranceClassifier } = require('../llm/insuranceClassifier');
 const { getSubtypeSchema } = require('../../schemas/insuranceSubtypeSchemas');
+const { getInsuranceFieldValidator, FIELD_STATUSES } = require('../../services/insuranceFieldValidator');
 
 class DoclingInsuranceParser {
   /**
@@ -19,14 +20,12 @@ class DoclingInsuranceParser {
     const rawText = doclingData.fullText || doclingData.markdown || '';
     const tables = doclingData.tables || [];
     const keyValues = doclingData.keyValues || {};
-    const paragraphs = doclingData.paragraphs || [];
-    const headings = doclingData.headings || [];
 
     // 1. Classification
     const classifier = getInsuranceClassifier();
     const classification = classifier.classify(rawText, fileName);
 
-    const effectiveType = classification.type || 'health';
+    const effectiveType = classification.type || 'motor';
     const effectiveSubtype = requestedSubtype || classification.subtype || 'car';
     const subtypeSchema = getSubtypeSchema(effectiveSubtype);
 
@@ -38,12 +37,12 @@ class DoclingInsuranceParser {
           const cleanPattern = p.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
           if (cleanKey === cleanPattern || cleanKey.includes(cleanPattern)) {
             const val = typeof vObj === 'object' ? vObj.value : vObj;
-            if (val && val.trim()) {
+            if (val && String(val).trim()) {
               return {
-                value: val.trim(),
+                value: String(val).trim(),
                 page: vObj.page || 1,
                 source: 'docling_kv',
-                confidence: 0.95
+                confidence: 0.96
               };
             }
           }
@@ -52,35 +51,19 @@ class DoclingInsuranceParser {
       return null;
     };
 
-    // 3. Scan Tables for specific data grids
+    // 3. Scan Tables for specific 2D tabular schedules
     const tableData = this._scanTables(tables);
 
-    // 4. Build Customer Information
-    const customer = this._extractCustomer(rawText, keyValues, tableData, getKv);
+    // 4. Build Raw Candidate Objects
+    const rawCustomer = this._extractRawCustomer(rawText, tableData, getKv);
+    const rawPolicy = this._extractRawPolicy(rawText, tableData, getKv, classification, effectiveType, effectiveSubtype, subtypeSchema);
+    const rawMotor = effectiveType === 'motor' ? this._extractRawMotor(rawText, tableData, getKv) : null;
+    const rawPremium = this._extractRawPremium(rawText, tableData, getKv);
+    const rawNominee = this._extractRawNominee(rawText, tableData, getKv);
+    const rawBroker = this._extractRawBroker(rawText, tableData, getKv);
+    const rawPayment = this._extractRawPayment(rawText, tableData, getKv);
 
-    // 5. Build Policy Information
-    const policy = this._extractPolicy(rawText, keyValues, tableData, getKv, classification, effectiveType, effectiveSubtype, subtypeSchema);
-
-    // 6. Build Motor Details (if motor)
-    let motor = null;
-    if (effectiveType === 'motor') {
-      motor = this._extractMotor(rawText, keyValues, tableData, getKv);
-    }
-
-    // 7. Build Premium Breakdown
-    const premium = this._extractPremium(rawText, keyValues, tableData, getKv);
-
-    // 8. Build Nominee Details
-    const nominee = this._extractNominee(rawText, keyValues, tableData, getKv);
-
-    // 9. Build Broker & Payment Details
-    const brokerDetails = this._extractBroker(rawText, keyValues, tableData, getKv);
-    const paymentDetails = this._extractPayment(rawText, keyValues, tableData, getKv);
-
-    // 10. Insured Members (for Health)
-    const insuredMembers = effectiveType === 'health' ? (tableData.members || []) : [];
-
-    return {
+    const rawPayload = {
       classification: {
         ...classification,
         effectiveType,
@@ -94,14 +77,22 @@ class DoclingInsuranceParser {
         tableCount: tables.length,
         ocrApplied: !!doclingData.ocrApplied
       },
-      customer,
-      policy,
-      motor,
-      premium,
-      nominee,
-      brokerDetails,
-      paymentDetails,
-      insuredMembers,
+      customer: rawCustomer,
+      policy: rawPolicy,
+      motor: rawMotor,
+      premium: rawPremium,
+      nominee: rawNominee,
+      brokerDetails: rawBroker,
+      paymentDetails: rawPayment,
+      insuredMembers: effectiveType === 'health' ? (tableData.members || []) : []
+    };
+
+    // 5. Run Field-Level Validation, Normalization, and Cross-Field Consistency Checks
+    const validator = getInsuranceFieldValidator();
+    const validatedResult = validator.validateAndNormalize(rawPayload, rawText);
+
+    return {
+      ...validatedResult,
       tablesPreview: tables.slice(0, 5).map(t => ({
         caption: t.caption,
         page: t.page,
@@ -155,6 +146,21 @@ class DoclingInsuranceParser {
           if (cellKey.includes('model') && !findings.motorSpecs.model) {
             findings.motorSpecs.model = cellVal;
           }
+          if (cellKey.includes('variant') && !findings.motorSpecs.variant) {
+            findings.motorSpecs.variant = cellVal;
+          }
+          if (cellKey.includes('fuel') && !findings.motorSpecs.fuelType) {
+            findings.motorSpecs.fuelType = cellVal;
+          }
+          if ((cellKey.includes('cubic capacity') || cellKey.includes('cc')) && !findings.motorSpecs.cubicCapacity) {
+            findings.motorSpecs.cubicCapacity = cellVal.replace(/\D/g, '');
+          }
+          if ((cellKey.includes('seating capacity') || cellKey.includes('seats')) && !findings.motorSpecs.seatingCapacity) {
+            findings.motorSpecs.seatingCapacity = cellVal.replace(/\D/g, '');
+          }
+          if ((cellKey.includes('mfg year') || cellKey.includes('year of mfg') || cellKey.includes('year of manufacture')) && !findings.motorSpecs.manufacturingYear) {
+            findings.motorSpecs.manufacturingYear = cellVal.replace(/\D/g, '');
+          }
           // IDV
           if (cellKey.includes('idv') || cellKey.includes('insured declared value')) {
             const num = cellVal.replace(/[^0-9.]/g, '');
@@ -166,7 +172,7 @@ class DoclingInsuranceParser {
             if (num) findings.premiums.basicPremium = num;
           }
           // Gross / Total Premium
-          if (cellKey.includes('total premium') || cellKey.includes('final premium') || cellKey.includes('gross premium')) {
+          if (cellKey.includes('total premium') || cellKey.includes('final premium') || cellKey.includes('gross premium') || cellKey.includes('total amount payable')) {
             const num = cellVal.replace(/[^0-9.]/g, '');
             if (num) findings.premiums.finalPremium = num;
           }
@@ -195,77 +201,89 @@ class DoclingInsuranceParser {
     return findings;
   }
 
-  _extractCustomer(text, keyValues, tableData, getKv) {
-    const nameKv = getKv(['proposer name', 'insured name', 'customer name', 'name of the insured', 'policyholder name']);
+  _extractRawCustomer(text, tableData, getKv) {
+    const nameKv = getKv(['proposer name', 'insured name', 'customer name', 'name of the insured', 'policyholder name', 'name of insured']);
+    const titleKv = getKv(['title', 'salutation']);
     const mobileKv = getKv(['mobile no', 'mobile number', 'contact no', 'phone no', 'telephone no']);
     const emailKv = getKv(['email id', 'email address', 'email']);
     const panKv = getKv(['pan no', 'pan card', 'pan number', 'pan']);
     const dobKv = getKv(['date of birth', 'dob', 'birth date']);
-    const addressKv = getKv(['address', 'communication address', 'residence address', 'postal address']);
+    const addressKv = getKv(['address', 'communication address', 'residence address', 'postal address', 'permanent address']);
     const pincodeKv = getKv(['pincode', 'pin code', 'pin', 'postal code']);
+    const genderKv = getKv(['gender', 'sex']);
 
-    const createField = (kv, regexFallback, transform = null) => {
-      if (kv && kv.value) {
-        const val = transform ? transform(kv.value) : kv.value;
-        return { value: val, state: 'extracted', confidence: kv.confidence, source: kv.source, page: kv.page };
+    // Regex Fallbacks if not in Key-Values
+    const nameRegex = /(?:Name of (?:the )?Insured|Proposer Name|Insured Name|Customer Name)\s*[:\-–]\s*([A-Za-z\s.]{3,50})/i;
+    const mobileRegex = /(?:Mobile|Phone|Contact)\s*(?:No|Number)?\s*[:\-–]?\s*([6-9]\d{9})\b/i;
+    const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+    const panRegex = /\b([A-Z]{5}[0-9]{4}[A-Z])\b/;
+    const dobRegex = /(?:DOB|Date of Birth)\s*[:\-–]\s*([0-3]?\d[\/\-\.][0-1]?\d[\/\-\.]\d{4})/;
+
+    const extractVal = (kv, regex) => {
+      if (kv && kv.value) return kv.value;
+      if (regex) {
+        const m = text.match(regex);
+        if (m && m[1]) return m[1].trim();
       }
-      if (regexFallback) {
-        const m = text.match(regexFallback);
-        if (m && m[1]) {
-          const val = transform ? transform(m[1].trim()) : m[1].trim();
-          return { value: val, state: 'extracted', confidence: 0.85, source: 'docling_text', page: 1 };
-        }
-      }
-      return { value: null, state: 'not_detected', confidence: null, source: 'document' };
+      return null;
     };
 
     return {
-      name: createField(nameKv, /(?:Name of (?:the )?Insured|Proposer Name|Insured Name|Customer Name)\s*[:\-]\s*([A-Za-z\s.]{3,50})/i),
-      mobile: createField(mobileKv, /(?:Mobile|Phone|Contact)\s*(?:No|Number)?\s*[:\-]\s*([6-9]\d{9})/i),
-      email: createField(emailKv, /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/),
-      pan: createField(panKv, /([A-Z]{5}[0-9]{4}[A-Z]{1})/, v => v.toUpperCase()),
-      dob: createField(dobKv, /(?:DOB|Date of Birth)\s*[:\-]\s*(\d{2}[-/.]\d{2}[-/.]\d{4})/),
-      gender: { value: /female|mrs\.|ms\./i.test(text) ? 'female' : 'male', state: 'extracted', confidence: 0.8, source: 'docling_structure' },
-      address: createField(addressKv, /(?:Address|Communication Address)\s*[:\-]\s*([^\n\r]{10,120})/i),
-      pincode: createField(pincodeKv, /\b([1-9][0-9]{5})\b/),
-      customerType: { value: /pvt\.?\s*ltd|llp|limited|logistics|enterprises/i.test(text) ? 'corporate' : 'individual', state: 'extracted', confidence: 0.9, source: 'docling_structure' }
+      name: extractVal(nameKv, nameRegex),
+      title: titleKv?.value || (text.match(/\b(Mr\.|Mrs\.|Ms\.|Dr\.|M\/s)\b/i)?.[1] || null),
+      mobile: extractVal(mobileKv, mobileRegex),
+      email: extractVal(emailKv, emailRegex),
+      pan: extractVal(panKv, panRegex),
+      dob: extractVal(dobKv, dobRegex),
+      gender: genderKv?.value || null, // Never default
+      address: addressKv?.value || null,
+      pincode: pincodeKv?.value || (text.match(/\b([1-9][0-9]{5})\b/)?.[1] || null)
     };
   }
 
-  _extractPolicy(text, keyValues, tableData, getKv, classification, effectiveType, effectiveSubtype, subtypeSchema) {
+  _extractRawPolicy(text, tableData, getKv, classification, effectiveType, effectiveSubtype, subtypeSchema) {
     const polKv = getKv(['policy no', 'policy number', 'certificate no', 'e policy no', 'document no']);
-    const startKv = getKv(['period of insurance from', 'policy start date', 'effective date', 'start date', 'from date']);
+    const startKv = getKv(['period of insurance from', 'policy start date', 'effective date', 'start date', 'from date', 'inception date']);
     const endKv = getKv(['period of insurance to', 'policy end date', 'expiry date', 'end date', 'to date']);
-    const siKv = getKv(['sum insured', 'sum assured', 'total sum insured']);
+    const issueKv = getKv(['policy issue date', 'issue date', 'date of issue', 'created date']);
+    const siKv = getKv(['sum insured', 'sum assured', 'total sum insured', 'idv']);
 
-    const polNum = polKv?.value || tableData.policyNumber || (text.match(/(?:Policy|Certificate)\s*(?:No|Number)\s*[:\-]\s*([A-Za-z0-9\/-]{7,35})/i)?.[1]?.trim()) || null;
+    const polNum = polKv?.value || tableData.policyNumber || (text.match(/(?:Policy|Certificate)\s*(?:No|Number)\s*[:\-–]\s*([A-Za-z0-9\/-]{7,35})/i)?.[1]?.trim()) || null;
 
     return {
-      insurer: { value: classification.detectedInsurer || 'HDFC ERGO General Insurance', state: 'extracted', confidence: 0.9, source: 'docling_structure' },
-      productName: { value: classification.detectedProduct || subtypeSchema?.name || effectiveSubtype, state: 'extracted', confidence: 0.85, source: 'docling_structure' },
-      policyNumber: polNum ? { value: polNum, state: 'extracted', confidence: polKv ? 0.98 : 0.88, source: polKv ? 'docling_kv' : 'docling_table' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      policyType: { value: effectiveType === 'motor' ? 'comprehensive' : 'standard', state: 'extracted', confidence: 0.9, source: 'docling_structure' },
-      insuranceType: { value: effectiveType, state: 'extracted', confidence: 0.95, source: 'classification' },
-      insuranceSubtype: { value: effectiveSubtype, state: 'extracted', confidence: 0.95, source: 'classification' },
-      startDate: startKv ? { value: startKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      endDate: endKv ? { value: endKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      sumAssured: siKv ? { value: siKv.value.replace(/[^0-9.]/g, ''), state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }
+      insurer: classification.detectedInsurer || null,
+      productName: classification.detectedProduct || subtypeSchema?.name || effectiveSubtype,
+      policyNumber: polNum,
+      policyType: effectiveType === 'motor' ? 'comprehensive' : 'standard',
+      businessType: /new\s*vehicle|new\s*business/i.test(text) ? 'new' : 'renewal',
+      startDate: startKv?.value || null,
+      endDate: endKv?.value || null,
+      issueDate: issueKv?.value || null,
+      renewalDate: endKv?.value || null,
+      sumAssured: siKv?.value || tableData.idvValues.idv || null
     };
   }
 
-  _extractMotor(text, keyValues, tableData, getKv) {
+  _extractRawMotor(text, tableData, getKv) {
     const regKv = getKv(['registration no', 'reg no', 'vehicle no', 'regn no']);
     const engKv = getKv(['engine no', 'engine number']);
     const chasKv = getKv(['chassis no', 'chassis number', 'vin']);
     const makeKv = getKv(['make', 'vehicle make', 'manufacturer']);
     const modelKv = getKv(['model', 'vehicle model']);
+    const variantKv = getKv(['variant', 'sub model', 'model variant']);
+    const fuelKv = getKv(['fuel type', 'fuel']);
+    const ccKv = getKv(['cubic capacity', 'cc', 'engine capacity']);
+    const seatsKv = getKv(['seating capacity', 'seating', 'carrying capacity']);
+    const yearKv = getKv(['year of mfg', 'manufacturing year', 'mfg year', 'year of manufacture']);
     const idvKv = getKv(['idv', 'insured declared value', 'vehicle idv', 'total idv']);
     const ncbKv = getKv(['ncb', 'no claim bonus', 'ncb percentage', 'ncb discount']);
+    const prevPolKv = getKv(['previous policy no', 'previous policy number', 'prior policy no']);
+    const prevInsKv = getKv(['previous insurer', 'previous insurance company']);
 
-    const regNo = regKv?.value?.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || tableData.motorSpecs.registrationNumber || null;
-    const engineNo = engKv?.value?.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || tableData.motorSpecs.engineNumber || null;
-    const chassisNo = chasKv?.value?.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || tableData.motorSpecs.chassisNumber || null;
-    const idv = idvKv?.value?.replace(/[^0-9.]/g, '') || tableData.idvValues.idv || null;
+    const regNo = regKv?.value || tableData.motorSpecs.registrationNumber || (text.match(/(?:Registration|Vehicle|Regn)\s*(?:No|Number)\s*[:\-–]?\s*([A-Z]{2}\s?\d{1,3}\s?[A-Z]{0,3}\s?\d{4})/i)?.[1]?.trim()) || null;
+    const engineNo = engKv?.value || tableData.motorSpecs.engineNumber || (text.match(/(?:Engine)\s*(?:No|Number)\s*[:\-–]?\s*([A-Za-z0-9]{5,25})/i)?.[1]?.trim()) || null;
+    const chassisNo = chasKv?.value || tableData.motorSpecs.chassisNumber || (text.match(/(?:Chassis|VIN)\s*(?:No|Number)?\s*[:\-–]?\s*([A-Za-z0-9]{17})/i)?.[1]?.trim()) || null;
+    const idv = idvKv?.value || tableData.idvValues.idv || null;
 
     // Detect Add-ons in text or table
     const hasZeroDep = /zero\s*dep|nil\s*dep|bumper\s*to\s*bumper/i.test(text);
@@ -280,68 +298,72 @@ class DoclingInsuranceParser {
     const hasPaCover = /owner\s*driver|personal\s*accident\s*cover\s*for\s*owner/i.test(text);
 
     return {
-      registrationNumber: regNo ? { value: regNo, state: 'extracted', confidence: 0.98, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      make: makeKv ? { value: makeKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : (tableData.motorSpecs.make ? { value: tableData.motorSpecs.make, state: 'extracted', confidence: 0.9, source: 'docling_table' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }),
-      model: modelKv ? { value: modelKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : (tableData.motorSpecs.model ? { value: tableData.motorSpecs.model, state: 'extracted', confidence: 0.9, source: 'docling_table' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }),
-      engineNumber: engineNo ? { value: engineNo, state: 'extracted', confidence: 0.98, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      chassisNumber: chassisNo ? { value: chassisNo, state: 'extracted', confidence: 0.98, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      idv: idv ? { value: idv, state: 'extracted', confidence: 0.95, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      ncbPercentage: ncbKv ? { value: ncbKv.value.replace(/[^0-9]/g, ''), state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      zeroDepreciation: { value: hasZeroDep, state: hasZeroDep ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      roadsideAssistance: { value: hasRsa, state: hasRsa ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      engineProtection: { value: hasEngineProt, state: hasEngineProt ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      returnToInvoice: { value: hasRti, state: hasRti ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      consumables: { value: hasConsumables, state: hasConsumables ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      ncbProtector: { value: hasNcbProt, state: hasNcbProt ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      tyreProtector: { value: hasTyreProt, state: hasTyreProt ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      keyReplacement: { value: hasKeyReplacement, state: hasKeyReplacement ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      personalBelongings: { value: hasPersonalBelongings, state: hasPersonalBelongings ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' },
-      personalAccidentCover: { value: hasPaCover, state: hasPaCover ? 'extracted' : 'not_detected', confidence: 0.95, source: 'docling_structure' }
+      registrationNumber: regNo,
+      make: makeKv?.value || tableData.motorSpecs.make || null,
+      model: modelKv?.value || tableData.motorSpecs.model || null,
+      variant: variantKv?.value || tableData.motorSpecs.variant || null,
+      engineNumber: engineNo,
+      chassisNumber: chassisNo,
+      fuelType: fuelKv?.value || tableData.motorSpecs.fuelType || null,
+      cubicCapacity: ccKv?.value || tableData.motorSpecs.cubicCapacity || null,
+      seatingCapacity: seatsKv?.value || tableData.motorSpecs.seatingCapacity || null,
+      manufacturingYear: yearKv?.value || tableData.motorSpecs.manufacturingYear || null,
+      idv: idv,
+      ncbPercentage: ncbKv?.value || null,
+      zeroDepreciation: hasZeroDep ? true : null,
+      roadsideAssistance: hasRsa ? true : null,
+      engineProtection: hasEngineProt ? true : null,
+      returnToInvoice: hasRti ? true : null,
+      consumables: hasConsumables ? true : null,
+      ncbProtector: hasNcbProt ? true : null,
+      tyreProtector: hasTyreProt ? true : null,
+      keyReplacement: hasKeyReplacement ? true : null,
+      personalBelongings: hasPersonalBelongings ? true : null,
+      personalAccidentCover: hasPaCover ? true : null,
+      previousPolicyNumber: prevPolKv?.value || null,
+      previousInsurer: prevInsKv?.value || null
     };
   }
 
-  _extractPremium(text, keyValues, tableData, getKv) {
-    const basicKv = getKv(['basic premium', 'net premium', 'od premium', 'own damage premium']);
-    const finalKv = getKv(['total premium', 'gross premium', 'final premium', 'total amount payable']);
+  _extractRawPremium(text, tableData, getKv) {
+    const basicKv = getKv(['basic premium', 'net premium', 'od premium', 'own damage premium', 'basic od']);
+    const finalKv = getKv(['total premium', 'gross premium', 'final premium', 'total amount payable', 'total payable']);
     const gstKv = getKv(['gst', 'cgst', 'sgst', 'igst', 'total tax']);
 
-    const basicVal = basicKv?.value?.replace(/[^0-9.]/g, '') || tableData.premiums.basicPremium || null;
-    const finalVal = finalKv?.value?.replace(/[^0-9.]/g, '') || tableData.premiums.finalPremium || null;
-    const gstVal = gstKv?.value?.replace(/[^0-9.]/g, '') || null;
-
     return {
-      basicPremium: basicVal ? { value: basicVal, state: 'extracted', confidence: 0.95, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      finalPremium: finalVal ? { value: finalVal, state: 'extracted', confidence: 0.98, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      gst: gstVal ? { value: gstVal, state: 'extracted', confidence: 0.9, source: 'docling' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }
+      basicPremium: basicKv?.value || tableData.premiums.basicPremium || null,
+      netPremium: basicKv?.value || tableData.premiums.basicPremium || null,
+      finalPremium: finalKv?.value || tableData.premiums.finalPremium || null,
+      gst: gstKv?.value || null
     };
   }
 
-  _extractNominee(text, keyValues, tableData, getKv) {
+  _extractRawNominee(text, tableData, getKv) {
     const nomKv = getKv(['nominee name', 'name of nominee', 'nominee']);
-    const relKv = getKv(['nominee relationship', 'relation with insured', 'nominee relation']);
+    const relKv = getKv(['nominee relationship', 'relation with insured', 'nominee relation', 'relation']);
     return {
-      name: nomKv ? { value: nomKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      relationship: relKv ? { value: relKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: 'Spouse', state: 'not_detected', confidence: null, source: 'document' },
-      share: { value: 100, state: 'extracted', confidence: 0.9, source: 'crm_default' }
+      name: nomKv?.value || null,
+      relationship: relKv?.value || null,
+      share: 100
     };
   }
 
-  _extractBroker(text, keyValues, tableData, getKv) {
-    const brokerKv = getKv(['broker name', 'agency name', 'intermediary name', 'agent name']);
+  _extractRawBroker(text, tableData, getKv) {
+    const brokerKv = getKv(['broker name', 'agency name', 'intermediary name', 'agent name', 'posp name']);
     const codeKv = getKv(['broker code', 'agent code', 'intermediary code', 'posp code']);
     return {
-      brokerAgency: brokerKv ? { value: brokerKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      agentName: brokerKv ? { value: brokerKv.value, state: 'extracted', confidence: 0.9, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' },
-      agentCode: codeKv ? { value: codeKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }
+      brokerAgency: brokerKv?.value || null,
+      agentName: brokerKv?.value || null,
+      agentCode: codeKv?.value || null
     };
   }
 
-  _extractPayment(text, keyValues, tableData, getKv) {
+  _extractRawPayment(text, tableData, getKv) {
     const refKv = getKv(['receipt no', 'transaction no', 'payment ref', 'utr no', 'cheque no']);
     return {
-      paymentStatus: { value: 'completed', state: 'extracted', confidence: 0.9, source: 'crm_default' },
-      paymentMethod: { value: /cheque/i.test(text) ? 'Cheque' : 'Online', state: 'extracted', confidence: 0.85, source: 'docling_structure' },
-      transactionReference: refKv ? { value: refKv.value, state: 'extracted', confidence: 0.95, source: 'docling_kv' } : { value: null, state: 'not_detected', confidence: null, source: 'document' }
+      paymentStatus: 'completed',
+      paymentMethod: /cheque/i.test(text) ? 'Cheque' : 'Online',
+      transactionReference: refKv?.value || null
     };
   }
 }
