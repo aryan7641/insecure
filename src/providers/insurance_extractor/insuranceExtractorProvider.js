@@ -318,6 +318,13 @@ class InsuranceExtractorProvider {
       },
       reviewRequired: response.review_required || false,
       globalConflicts: response.result?.global_conflicts || [],
+      customer,
+      policy,
+      premium,
+      nominee,
+      paymentDetails,
+      motor,
+      healthDetails,
       extractedData: {
         customer,
         policy,
