@@ -62,8 +62,8 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
   try {
     let extractionResult = null;
 
-    // 4. Primary Extraction: Try OpenAI-based Insurance Extractor if configured
-    if (process.env.OPENAI_API_KEY) {
+    // 4. Primary Extraction: Try LLM Insurance Extractor if GEMINI_API_KEY or OPENAI_API_KEY configured
+    if (process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY) {
       try {
         const extractorProvider = getInsuranceExtractorProvider();
         extractionResult = await extractorProvider.extractPolicy(file.buffer, file.originalname, requestedSubtype);
