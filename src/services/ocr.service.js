@@ -4,6 +4,7 @@ const InsurancePolicy = require('../models/InsurancePolicy');
 const FollowUp = require('../models/FollowUp');
 const ExtractionJob = require('../models/ExtractionJob');
 const { getStorageProvider } = require('../providers/storage/azureBlobProvider');
+const { getInsuranceExtractorProvider } = require('../providers/insurance_extractor/insuranceExtractorProvider');
 const { getDoclingProvider } = require('../providers/docling/doclingProvider');
 const { getDoclingInsuranceParser } = require('../providers/docling/doclingInsuranceParser');
 const { getInsuranceLlmExtractor } = require('../providers/llm/insuranceLlmExtractor');
@@ -16,7 +17,7 @@ const { NotFoundError, ConflictError, ValidationError } = require('../utils/apiE
 const { OCR_STATUSES, ACTIVITY_TYPES, DOCUMENT_CATEGORIES, FOLLOW_UP_TYPES, FOLLOW_UP_STATUSES, RENEWAL_INTERVALS } = require('../utils/constants');
 
 /**
- * Step 1: Upload Policy PDF -> Store in AWS S3 -> Docling Structured Extraction -> Classify & Subtype Schema -> Duplicate Check -> Return Draft
+ * Step 1: Upload Policy PDF -> Store in AWS S3 -> Docling / LLM Structured Extraction -> Classify & Subtype Schema -> Duplicate Check -> Return Draft
  */
 const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) => {
   if (!file || !file.buffer) {
@@ -59,76 +60,90 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
   });
 
   try {
-    // 4. Primary Extraction: Docling Structured Document Extraction (Text + Tables + Structure)
-    const doclingProvider = getDoclingProvider();
-    const doclingResult = await doclingProvider.extractStructuredDocument(file.buffer, file.originalname);
-    
-    extractionJob.rawText = (doclingResult.fullText || doclingResult.markdown || '').slice(0, 10000);
-    extractionJob.status = 'extracting';
-    await extractionJob.save();
+    let extractionResult = null;
 
-    // 5. Docling Domain Parser with 2D Tabular & Key-Value spatial mining
-    const doclingParser = getDoclingInsuranceParser();
-    let extractionResult = doclingParser.parse(doclingResult, file.originalname, requestedSubtype);
+    // 4. Primary Extraction: Try OpenAI-based Insurance Extractor if configured
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        const extractorProvider = getInsuranceExtractorProvider();
+        extractionResult = await extractorProvider.extractPolicy(file.buffer, file.originalname, requestedSubtype);
+        if (extractionResult) {
+          extractionJob.rawText = JSON.stringify(extractionResult.rawExtraction || {}).slice(0, 10000);
+          extractionJob.status = 'extracted';
+          await extractionJob.save();
+        }
+      } catch (extErr) {
+        console.warn('[OCR Service] Primary Insurance Extractor failed, falling back to Docling parser:', extErr.message);
+      }
+    }
 
-    // Complement with deep regex subtype extractor if any fields can be further enriched
-    const llmExtractor = getInsuranceLlmExtractor();
-    const regexEnrichment = await llmExtractor.extractInsuranceData(doclingResult.fullText || doclingResult.markdown, file.originalname, requestedSubtype);
-    
-    // Merge results, prioritizing Docling high-confidence extracted fields
-    if (regexEnrichment) {
-      if (!extractionResult.customer?.name?.value && regexEnrichment.customer?.name?.value) {
-        extractionResult.customer.name = regexEnrichment.customer.name;
-      }
-      if (!extractionResult.customer?.mobile?.value && regexEnrichment.customer?.mobile?.value) {
-        extractionResult.customer.mobile = regexEnrichment.customer.mobile;
-      }
-      if (!extractionResult.customer?.email?.value && regexEnrichment.customer?.email?.value) {
-        extractionResult.customer.email = regexEnrichment.customer.email;
-      }
-      if (!extractionResult.customer?.pan?.value && regexEnrichment.customer?.pan?.value) {
-        extractionResult.customer.pan = regexEnrichment.customer.pan;
-      }
-      if (!extractionResult.policy?.policyNumber?.value && regexEnrichment.policy?.policyNumber?.value) {
-        extractionResult.policy.policyNumber = regexEnrichment.policy.policyNumber;
-      }
-      if (extractionResult.motor && regexEnrichment.motor) {
-        if (!extractionResult.motor.registrationNumber?.value && regexEnrichment.motor.registrationNumber?.value) {
-          extractionResult.motor.registrationNumber = regexEnrichment.motor.registrationNumber;
+    // 5. Fallback: Docling Structured Document Extraction (Text + Tables + Structure)
+    if (!extractionResult) {
+      const doclingProvider = getDoclingProvider();
+      const doclingResult = await doclingProvider.extractStructuredDocument(file.buffer, file.originalname);
+      
+      extractionJob.rawText = (doclingResult.fullText || doclingResult.markdown || '').slice(0, 10000);
+      extractionJob.status = 'extracting';
+      await extractionJob.save();
+
+      const doclingParser = getDoclingInsuranceParser();
+      extractionResult = doclingParser.parse(doclingResult, file.originalname, requestedSubtype);
+
+      const llmExtractor = getInsuranceLlmExtractor();
+      const regexEnrichment = await llmExtractor.extractInsuranceData(doclingResult.fullText || doclingResult.markdown, file.originalname, requestedSubtype);
+      
+      if (regexEnrichment) {
+        if (!extractionResult.customer?.name?.value && regexEnrichment.customer?.name?.value) {
+          extractionResult.customer.name = regexEnrichment.customer.name;
         }
-        if (!extractionResult.motor.engineNumber?.value && regexEnrichment.motor.engineNumber?.value) {
-          extractionResult.motor.engineNumber = regexEnrichment.motor.engineNumber;
+        if (!extractionResult.customer?.mobile?.value && regexEnrichment.customer?.mobile?.value) {
+          extractionResult.customer.mobile = regexEnrichment.customer.mobile;
         }
-        if (!extractionResult.motor.chassisNumber?.value && regexEnrichment.motor.chassisNumber?.value) {
-          extractionResult.motor.chassisNumber = regexEnrichment.motor.chassisNumber;
+        if (!extractionResult.customer?.email?.value && regexEnrichment.customer?.email?.value) {
+          extractionResult.customer.email = regexEnrichment.customer.email;
         }
-        if (!extractionResult.motor.idv?.value && regexEnrichment.motor.idv?.value) {
-          extractionResult.motor.idv = regexEnrichment.motor.idv;
+        if (!extractionResult.customer?.pan?.value && regexEnrichment.customer?.pan?.value) {
+          extractionResult.customer.pan = regexEnrichment.customer.pan;
         }
-        // Merge comprehensive sub-fields
-        extractionResult.motor = {
-          ...regexEnrichment.motor,
-          ...extractionResult.motor,
-          // Preserve high-confidence docling values
-          registrationNumber: extractionResult.motor.registrationNumber?.value ? extractionResult.motor.registrationNumber : regexEnrichment.motor.registrationNumber,
-          engineNumber: extractionResult.motor.engineNumber?.value ? extractionResult.motor.engineNumber : regexEnrichment.motor.engineNumber,
-          chassisNumber: extractionResult.motor.chassisNumber?.value ? extractionResult.motor.chassisNumber : regexEnrichment.motor.chassisNumber,
-          idv: extractionResult.motor.idv?.value ? extractionResult.motor.idv : regexEnrichment.motor.idv
-        };
-      }
-      if (extractionResult.premium && regexEnrichment.premium) {
-        if (!extractionResult.premium.finalPremium?.value && regexEnrichment.premium.finalPremium?.value) {
-          extractionResult.premium.finalPremium = regexEnrichment.premium.finalPremium;
+        if (!extractionResult.policy?.policyNumber?.value && regexEnrichment.policy?.policyNumber?.value) {
+          extractionResult.policy.policyNumber = regexEnrichment.policy.policyNumber;
         }
-        if (!extractionResult.premium.basicPremium?.value && regexEnrichment.premium.basicPremium?.value) {
-          extractionResult.premium.basicPremium = regexEnrichment.premium.basicPremium;
+        if (extractionResult.motor && regexEnrichment.motor) {
+          if (!extractionResult.motor.registrationNumber?.value && regexEnrichment.motor.registrationNumber?.value) {
+            extractionResult.motor.registrationNumber = regexEnrichment.motor.registrationNumber;
+          }
+          if (!extractionResult.motor.engineNumber?.value && regexEnrichment.motor.engineNumber?.value) {
+            extractionResult.motor.engineNumber = regexEnrichment.motor.engineNumber;
+          }
+          if (!extractionResult.motor.chassisNumber?.value && regexEnrichment.motor.chassisNumber?.value) {
+            extractionResult.motor.chassisNumber = regexEnrichment.motor.chassisNumber;
+          }
+          if (!extractionResult.motor.idv?.value && regexEnrichment.motor.idv?.value) {
+            extractionResult.motor.idv = regexEnrichment.motor.idv;
+          }
+          extractionResult.motor = {
+            ...regexEnrichment.motor,
+            ...extractionResult.motor,
+            registrationNumber: extractionResult.motor.registrationNumber?.value ? extractionResult.motor.registrationNumber : regexEnrichment.motor.registrationNumber,
+            engineNumber: extractionResult.motor.engineNumber?.value ? extractionResult.motor.engineNumber : regexEnrichment.motor.engineNumber,
+            chassisNumber: extractionResult.motor.chassisNumber?.value ? extractionResult.motor.chassisNumber : regexEnrichment.motor.chassisNumber,
+            idv: extractionResult.motor.idv?.value ? extractionResult.motor.idv : regexEnrichment.motor.idv
+          };
         }
-      }
-      if (regexEnrichment.brokerDetails && !extractionResult.brokerDetails?.agentCode?.value) {
-        extractionResult.brokerDetails = regexEnrichment.brokerDetails;
-      }
-      if (regexEnrichment.paymentDetails && !extractionResult.paymentDetails?.transactionReference?.value) {
-        extractionResult.paymentDetails = regexEnrichment.paymentDetails;
+        if (extractionResult.premium && regexEnrichment.premium) {
+          if (!extractionResult.premium.finalPremium?.value && regexEnrichment.premium.finalPremium?.value) {
+            extractionResult.premium.finalPremium = regexEnrichment.premium.finalPremium;
+          }
+          if (!extractionResult.premium.basicPremium?.value && regexEnrichment.premium.basicPremium?.value) {
+            extractionResult.premium.basicPremium = regexEnrichment.premium.basicPremium;
+          }
+        }
+        if (regexEnrichment.brokerDetails && !extractionResult.brokerDetails?.agentCode?.value) {
+          extractionResult.brokerDetails = regexEnrichment.brokerDetails;
+        }
+        if (regexEnrichment.paymentDetails && !extractionResult.paymentDetails?.transactionReference?.value) {
+          extractionResult.paymentDetails = regexEnrichment.paymentDetails;
+        }
       }
     }
 
