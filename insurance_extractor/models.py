@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 SourceType = Literal["document", "derived", "not_found"]
 
@@ -19,10 +19,7 @@ class Conflict(BaseModel):
 
 
 class ExtractedField(BaseModel):
-    """A UI-ready value plus provenance and quality metadata."""
-
     model_config = ConfigDict(extra="forbid")
-
     value: Optional[str] = None
     raw_value: Optional[str] = None
     source: SourceType = "not_found"
@@ -239,7 +236,6 @@ class HealthExtraction(BaseModel):
 
 
 class ExtractionEnvelope(BaseModel):
-    """Model-facing envelope. Policy-type payloads are kept separate to avoid giant, ambiguous schemas."""
     document_type: Literal["motor", "health"]
     document_type_confidence: float = Field(ge=0.0, le=1.0)
     motor: Optional[MotorExtraction] = None
@@ -253,8 +249,28 @@ class PageText(BaseModel):
     text: str
 
 
+class PipelineMetrics(BaseModel):
+    total_ms: float
+    pdf_ms: float
+    routing_ms: float
+    llm_ms: float = 0.0
+    normalization_ms: float
+    grounding_ms: float
+    pages_total: int
+    pages_sent_to_model: int = 0
+    visual_pages_sent: int = 0
+    source_chars: int
+    model_input_chars: int = 0
+    deterministic_path: bool
+    llm_called: bool
+    deterministic_fields_filled: int = 0
+    llm_fields_filled: int = 0
+    cache_hit: bool = False
+
+
 class ExtractionResponse(BaseModel):
     request_id: str
     result: ExtractionEnvelope
     ui_payload: dict
     review_required: bool
+    metrics: Optional[PipelineMetrics] = None

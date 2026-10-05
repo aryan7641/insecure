@@ -12,10 +12,24 @@ class InsuranceExtractorProvider {
         : (fs.existsSync('/app/docling-env/bin/python3') ? '/app/docling-env/bin/python3' : 'python3')
     );
     this.extractionModel = process.env.EXTRACTION_MODEL || 'gemini-3.5-flash-lite';
+    this.isEnabled = process.env.INSURANCE_EXTRACTOR_V3_ENABLED !== 'false';
   }
 
   /**
-   * Extract policy data using the insurance_extractor pipeline
+   * Convert DD-MM-YYYY to YYYY-MM-DD for HTML date inputs. Passthrough if already ISO or unknown format.
+   */
+  _convertDateToISO(val) {
+    if (!val || typeof val !== 'string') return val;
+    const ddmmyyyy = val.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (ddmmyyyy) {
+      const [, dd, mm, yyyy] = ddmmyyyy;
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return val; // already YYYY-MM-DD or unknown
+  }
+
+  /**
+   * Extract policy data using the insurance_extractor V3 pipeline
    * @param {Buffer} pdfBuffer 
    * @param {string} originalName 
    * @param {string|null} requestedSubtype 
@@ -62,7 +76,7 @@ class InsuranceExtractorProvider {
       const proc = spawn(this.pythonPath, args, {
         cwd: backendRoot,
         env,
-        timeout: 90000 // 90 second timeout for LLM structured parsing
+        timeout: 90000 // 90 second timeout
       });
 
       let stdout = '';
@@ -78,24 +92,24 @@ class InsuranceExtractorProvider {
 
       proc.on('close', (code) => {
         if (code !== 0) {
-          return reject(new Error(`Extractor failed with exit code ${code}: ${stderr || stdout}`));
+          return reject(new Error(`V3 Extractor failed with exit code ${code}: ${stderr || stdout}`));
         }
         try {
           const jsonStart = stdout.indexOf('{');
           const jsonEnd = stdout.lastIndexOf('}');
           if (jsonStart === -1 || jsonEnd === -1) {
-            return reject(new Error(`Extractor did not return valid JSON. Output: ${stdout}`));
+            return reject(new Error(`V3 Extractor did not return valid JSON. Output: ${stdout}`));
           }
           const rawJson = stdout.slice(jsonStart, jsonEnd + 1);
           const parsed = JSON.parse(rawJson);
           resolve(parsed);
         } catch (jsonErr) {
-          reject(new Error(`Failed to parse extractor JSON: ${jsonErr.message}. Output: ${stdout}`));
+          reject(new Error(`Failed to parse V3 extractor JSON: ${jsonErr.message}. Output: ${stdout}`));
         }
       });
 
       proc.on('error', (err) => {
-        reject(new Error(`Failed to start extractor process: ${err.message}`));
+        reject(new Error(`Failed to start V3 extractor process: ${err.message}`));
       });
     });
   }
@@ -130,6 +144,20 @@ class InsuranceExtractorProvider {
   }
 
   /**
+   * Like _field, but ensures date values are in YYYY-MM-DD format for HTML date inputs
+   */
+  _dateField(f, fallbackVal = '') {
+    const result = this._field(f, fallbackVal);
+    if (result.value) {
+      result.value = this._convertDateToISO(result.value);
+    }
+    if (result.rawValue) {
+      result.rawValue = this._convertDateToISO(result.rawValue);
+    }
+    return result;
+  }
+
+  /**
    * Format the ExtractionResponse into INSecure's exact internal extractionResult shape expected by PolicyPdfUploadModal.jsx
    */
   _formatExtractionResult(response, requestedSubtype) {
@@ -142,14 +170,14 @@ class InsuranceExtractorProvider {
     let effectiveSubtype = requestedSubtype;
     if (!effectiveSubtype) {
       if (isHealth) {
-        effectiveSubtype = ui.health?.basic_details?.subLobCategory || 'family_floater';
+        effectiveSubtype = ui.basic_details?.sub_lob_category || ui.basic_details?.subLobCategory || 'family_floater';
       } else {
         effectiveSubtype = 'car';
       }
     }
 
     const resObj = isHealth ? (result.health || {}) : (result.motor || {});
-    const uiObj = isHealth ? (ui.health || {}) : (ui.motor || {});
+    const uiObj = isHealth ? (ui.health || ui) : (ui.motor || ui);
 
     const cust = resObj.insured_customer || {};
     const pol = resObj.policy || {};
@@ -159,7 +187,7 @@ class InsuranceExtractorProvider {
     const nom = resObj.nominee || {};
     const pay = resObj.payment || {};
 
-    const detectedInsurerVal = pol.insurer_name?.value || (isHealth ? 'Care / Star Health' : 'Tata AIG General Insurance');
+    const detectedInsurerVal = pol.insurer_name?.value || (isHealth ? 'TATA AIG General Insurance Company Limited' : 'United India Insurance Company Limited');
 
     // Build structured extractedData with exact frontend keys
     const customer = {
@@ -167,7 +195,7 @@ class InsuranceExtractorProvider {
       name: this._field(cust.name, ''),
       mobile: this._field(cust.mobile, ''),
       email: this._field(cust.email, ''),
-      dob: this._field(cust.dob, ''),
+      dob: this._dateField(cust.dob, ''),
       gender: this._field(cust.gender || (isHealth && resObj.members?.[0]?.gender ? resObj.members[0].gender : null), ''),
       pan: this._field(cust.pan, ''),
       aadhaar: this._field(cust.aadhaar, ''),
@@ -189,13 +217,13 @@ class InsuranceExtractorProvider {
       policy_type: this._field(pol.policy_type, isHealth ? 'Family Floater' : 'Package Policy'),
       productName: this._field(pol.plan_name || pol.insurer_name, ''),
       planName: this._field(pol.plan_name || pol.insurer_name, ''),
-      issueDate: this._field(pol.policy_issue_date, ''),
-      policy_issue_date: this._field(pol.policy_issue_date, ''),
-      startDate: this._field(pol.policy_start_date, ''),
-      policy_start_date: this._field(pol.policy_start_date, ''),
-      endDate: this._field(pol.policy_end_date, ''),
-      policy_end_date: this._field(pol.policy_end_date, ''),
-      renewalDate: this._field(pol.policy_end_date, ''),
+      issueDate: this._dateField(pol.policy_issue_date, ''),
+      policy_issue_date: this._dateField(pol.policy_issue_date, ''),
+      startDate: this._dateField(pol.policy_start_date, ''),
+      policy_start_date: this._dateField(pol.policy_start_date, ''),
+      endDate: this._dateField(pol.policy_end_date, ''),
+      policy_end_date: this._dateField(pol.policy_end_date, ''),
+      renewalDate: this._dateField(pol.policy_end_date, ''),
       tenureYears: this._field(pol.policy_tenure, '1'),
       sumAssured: this._field(isHealth ? (pol.total_sum_assured || pol.base_sum_assured) : pol.idv_sum_assured, ''),
       baseSumAssured: this._field(pol.base_sum_assured, ''),
@@ -206,8 +234,8 @@ class InsuranceExtractorProvider {
     const premium = {
       finalPremium: this._field(prem.final_premium, ''),
       final_premium: this._field(prem.final_premium, ''),
-      basicPremium: this._field(isHealth ? prem.basic_premium : prem.net_premium, ''),
-      basic_premium: this._field(isHealth ? prem.basic_premium : prem.net_premium, ''),
+      basicPremium: this._field(isHealth ? (prem.basic_premium || prem.final_premium) : (prem.od_premium || prem.net_premium), ''),
+      basic_premium: this._field(isHealth ? (prem.basic_premium || prem.final_premium) : (prem.od_premium || prem.net_premium), ''),
       netPremium: this._field(prem.net_premium, ''),
       net_premium: this._field(prem.net_premium, ''),
       gst: this._field(isHealth ? prem.gst_percent : prem.gst_cess, ''),
@@ -235,8 +263,8 @@ class InsuranceExtractorProvider {
       seatingCapacity: this._field(veh.seats_including_driver, ''),
       seats_including_driver: this._field(veh.seats_including_driver, ''),
       zone: this._field(veh.zone, ''),
-      registrationDate: this._field(veh.registration_date, ''),
-      registration_date: this._field(veh.registration_date, ''),
+      registrationDate: this._dateField(veh.registration_date, ''),
+      registration_date: this._dateField(veh.registration_date, ''),
       manufacturingMonth: this._field(veh.mfg_month, ''),
       manufacturingYear: this._field(veh.mfg_year, ''),
       engineNumber: this._field(veh.engine_no, ''),
@@ -251,13 +279,64 @@ class InsuranceExtractorProvider {
       thirdPartyPremium: this._field(pol.active_tp_policy_number ? pol.active_tp_policy_number : null, ''),
       activeTpInsurerName: this._field(pol.active_tp_insurer_name, ''),
       activeTpPolicyNumber: this._field(pol.active_tp_policy_number, ''),
-      activeTpPolicyStartDate: this._field(pol.active_tp_policy_start_date, ''),
-      activeTpPolicyEndDate: this._field(pol.active_tp_policy_end_date, ''),
+      activeTpPolicyStartDate: this._dateField(pol.active_tp_policy_start_date, ''),
+      activeTpPolicyEndDate: this._dateField(pol.active_tp_policy_end_date, ''),
       financierName: this._field(veh.financier || pol.financed_by, ''),
       financed: this._field(veh.financed, 'No'),
       previousPolicyAvailable: this._field(veh.previous_policy_available, 'No'),
       addons: pol.add_ons || []
     } : undefined;
+
+    // Format insured members cleanly for UI list rendering
+    const formattedMembers = (resObj.members || []).map((m, idx) => ({
+      memberId: m.member_id?.value || m.memberId || `MEM-${idx + 1}`,
+      name: m.name?.value || m.name || '',
+      gender: (m.gender?.value || m.gender || 'male').toLowerCase(),
+      relationship: m.relationship?.value || m.relationship || 'Self',
+      relation: m.relationship?.value || m.relationship || 'Self',
+      dob: this._convertDateToISO(m.dob?.value || m.dob || ''),
+      age: m.age?.value !== undefined ? String(m.age.value) : (m.age ? String(m.age) : ''),
+      insuredSince: this._convertDateToISO(m.insured_since?.value || m.insuredSince || ''),
+      heightCm: m.height_cm?.value || m.heightCm || '',
+      weightKg: m.weight_kg?.value || m.weightKg || '',
+      sumInsured: m.sum_insured?.value || m.sumInsured || '',
+      abhaNo: m.abha_no?.value || m.abhaNo || '',
+      maternityCare: m.maternity_care?.value || m.maternityCare || '',
+      reductionMaternityWaitingPeriod: m.reduction_maternity_waiting_period?.value || m.reductionMaternityWaitingPeriod || '',
+      aggregateDeductible: m.aggregate_deductible?.value || m.aggregateDeductible || ''
+    }));
+
+    const formattedMedicalQuestions = (resObj.medical_questions || ui.medical_details || []).map(q => ({
+      questionId: q.question_id || q.questionId,
+      question: q.question,
+      answersByMember: (q.answers_by_member || q.answersByMember || []).map(a => typeof a === 'object' ? (a.value || '') : a),
+      details: q.details || '',
+      evidence: q.evidence || []
+    }));
+
+    const formattedOptionalCovers = (pol.optional_covers || ui.new_policy_details?.optional_covers || []).map(oc => ({
+      name: oc.name,
+      selected: oc.selected,
+      option: oc.option,
+      value: oc.value,
+      evidence: oc.evidence || []
+    }));
+
+    const formattedRiders = (pol.riders || ui.new_policy_details?.riders || []).map(r => ({
+      packageName: r.package_name || r.packageName,
+      riderName: r.rider_name || r.riderName,
+      selected: r.selected,
+      coverageLimit: r.coverage_limit || r.coverageLimit,
+      applicableMembers: r.applicable_members || r.applicableMembers || [],
+      evidence: r.evidence || []
+    }));
+
+    const formattedPreviousPolicies = (pol.previous_policies || ui.previous_policies || []).map(p => ({
+      insurerName: p.insurer_name?.value || p.insurer_name || '',
+      policyNumber: p.policy_number?.value || p.policy_number || '',
+      continuouslyInsuredSince: this._convertDateToISO(p.continuously_insured_since?.value || p.continuously_insured_since || ''),
+      portabilityRequested: p.portability_requested?.value || p.portability_requested || 'No'
+    }));
 
     const healthDetails = isHealth ? {
       lobCategory: this._field(bas.lob_category, 'health'),
@@ -269,7 +348,7 @@ class InsuranceExtractorProvider {
       numberOfChild: this._field(bas.number_of_child, '0'),
       numberOfParent: this._field(bas.number_of_parent, '0'),
       eldestPersonAgeType: this._field(bas.eldest_person_age_type, 'DOB'),
-      eldestPersonDob: this._field(bas.eldest_person_dob, ''),
+      eldestPersonDob: this._dateField(bas.eldest_person_dob, ''),
       treatmentZone: this._field(bas.treatment_zone, ''),
       ped: this._field(bas.ped, 'No'),
       previousPolicyAvailable: this._field(bas.previous_policy_available, 'No'),
@@ -278,16 +357,16 @@ class InsuranceExtractorProvider {
       totalSumAssured: this._field(pol.total_sum_assured, ''),
       ppt: this._field(pol.ppt, '1'),
       ppmFrequency: this._field(pol.ppm_frequency, 'yearly'),
-      members: uiObj.members || [],
-      medicalQuestions: uiObj.medicalQuestions || [],
-      optionalCovers: pol.optional_covers || [],
-      riders: pol.riders || [],
-      previousPolicies: pol.previous_policies || []
+      members: formattedMembers,
+      medicalQuestions: formattedMedicalQuestions,
+      optionalCovers: formattedOptionalCovers,
+      riders: formattedRiders,
+      previousPolicies: formattedPreviousPolicies
     } : undefined;
 
     const nominee = {
       name: this._field(nom.name, ''),
-      dob: this._field(nom.dob, ''),
+      dob: this._dateField(nom.dob, ''),
       relationship: this._field(nom.relationship, 'Spouse'),
       relation: this._field(nom.relationship, 'Spouse'),
       share: this._field(nom.share_percent, '100'),
@@ -305,7 +384,7 @@ class InsuranceExtractorProvider {
       payerName: this._field(pay.payer_name, ''),
       paymentAmount: this._field(pay.amount_paid, ''),
       receiptNumber: this._field(pay.receipt_number, ''),
-      receiptDate: this._field(pay.receipt_date, '')
+      receiptDate: this._dateField(pay.receipt_date, '')
     };
 
     return {
@@ -318,6 +397,7 @@ class InsuranceExtractorProvider {
       },
       reviewRequired: response.review_required || false,
       globalConflicts: response.result?.global_conflicts || [],
+      metrics: response.metrics || null,
       customer,
       policy,
       premium,
@@ -325,6 +405,8 @@ class InsuranceExtractorProvider {
       paymentDetails,
       motor,
       healthDetails,
+      insuredMembers: formattedMembers,
+      medicalDetails: formattedMedicalQuestions,
       extractedData: {
         customer,
         policy,
@@ -332,7 +414,9 @@ class InsuranceExtractorProvider {
         nominee,
         paymentDetails,
         motor,
-        healthDetails
+        healthDetails,
+        insuredMembers: formattedMembers,
+        medicalDetails: formattedMedicalQuestions
       },
       fields: uiObj.fields || {},
       rawExtraction: response

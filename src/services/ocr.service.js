@@ -62,18 +62,26 @@ const extractPolicyPdf = async (agencyId, file, user, requestedSubtype = null) =
   try {
     let extractionResult = null;
 
-    // 4. Primary Extraction: Try LLM Insurance Extractor if GEMINI_API_KEY or OPENAI_API_KEY configured
-    if (process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY) {
+    // 4. Primary Extraction: Try V3 Hybrid Insurance Extractor (Controlled by feature flag INSURANCE_EXTRACTOR_V3_ENABLED)
+    const isV3Enabled = process.env.INSURANCE_EXTRACTOR_V3_ENABLED !== 'false';
+    if (isV3Enabled) {
       try {
         const extractorProvider = getInsuranceExtractorProvider();
         extractionResult = await extractorProvider.extractPolicy(file.buffer, file.originalname, requestedSubtype);
         if (extractionResult) {
+          console.log('[OCR Service] V3 Insurance Extractor succeeded. Classification:', 
+            extractionResult.classification?.effectiveType, '/', extractionResult.classification?.effectiveSubtype,
+            '| Customer:', extractionResult.customer?.name?.value || '(not found)',
+            '| Policy:', extractionResult.policy?.policyNumber?.value || '(not found)');
           extractionJob.rawText = JSON.stringify(extractionResult.rawExtraction || {}).slice(0, 10000);
           extractionJob.status = 'extracted';
           await extractionJob.save();
+        } else {
+          console.warn('[OCR Service] V3 Insurance Extractor returned null/empty result');
         }
       } catch (extErr) {
-        console.warn('[OCR Service] Primary Insurance Extractor failed, falling back to Docling parser:', extErr.message);
+        console.warn('[OCR Service] V3 Insurance Extractor failed, falling back to legacy Docling parser:', extErr.message);
+        console.warn('[OCR Service] Extractor error stack:', extErr.stack);
       }
     }
 

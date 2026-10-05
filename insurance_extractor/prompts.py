@@ -20,7 +20,7 @@ CORE RULES
 9. Never use generic registered-office addresses as the insured/customer address.
 10. Never use broker/intermediary fields for the Broker/Agency UI control; that field is intentionally internal and must NOT be extracted.
 11. Preserve PRINTED PREMIUM VALUES. Do not recompute/round them when the document provides an explicit printed premium/tax/total.
-12. Normalize date values to DD-MM-YYYY when the date is clear, but retain raw_value.
+12. Normalize date values to YYYY-MM-DD or DD-MM-YYYY when the date is clear, but retain raw_value.
 13. Normalize common YES/NO values to Yes/No and Y/N to Yes/No.
 14. For money values, return digits with decimals only when printed/needed; do not add currency symbols.
 

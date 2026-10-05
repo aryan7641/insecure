@@ -1,284 +1,234 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-from .models import ExtractionEnvelope, ExtractedField
+from .models import ExtractionEnvelope, ExtractedField, AddOn
 
 
-def _val(field: ExtractedField | None, default: Any = None) -> Any:
-    if field is None or field.value is None:
-        return default
-    return field.value
+def v(f: ExtractedField | None):
+    if f is None:
+        return None
+    return f.value
 
 
-def _field_dict(field: ExtractedField | None) -> Dict[str, Any]:
-    if field is None:
-        return {"value": None, "state": "not_found", "confidence": 0.0, "source": "not_found"}
+def addon_map(addons: list[AddOn]) -> dict:
+    aliases = {
+        "road side assistance": "road_side_assistance",
+        "road side assistance / rsa": "road_side_assistance",
+        "rsa": "road_side_assistance",
+        "nil depreciation": "zero_depreciation",
+        "zero depreciation": "zero_depreciation",
+        "engine and gearbox protection": "engine_protector",
+        "engine protector": "engine_protector",
+        "return to invoice": "return_to_invoice",
+        "loss of key cover": "key_replacement",
+        "key replacement": "key_replacement",
+        "consumables cover": "consumables",
+        "consumables": "consumables",
+        "ncb protector": "ncb_protector",
+        "tyre protector": "tyre_protector",
+        "personal belongings": "personal_belongings",
+    }
+    out = {
+        "road_side_assistance": False,
+        "zero_depreciation": False,
+        "engine_protector": False,
+        "consumables": False,
+        "return_to_invoice": False,
+        "ncb_protector": False,
+        "tyre_protector": False,
+        "key_replacement": False,
+        "personal_belongings": False,
+    }
+    for item in addons:
+        key = aliases.get(item.name.strip().lower())
+        if key:
+            out[key] = bool(item.selected)
+    return out
+
+
+def motor_ui(result: ExtractionEnvelope) -> dict:
+    assert result.motor
+    m = result.motor
     return {
-        "value": field.value,
-        "rawValue": field.raw_value,
-        "state": "extracted" if field.value is not None and field.source != "not_found" else "not_found",
-        "source": field.source,
-        "confidence": field.confidence,
-        "requiresReview": field.requires_review,
-        "notes": field.notes,
-        "evidence": [e.model_dump() for e in field.evidence],
+        "vehicle_details": {
+            "type_of_vehicle": v(m.vehicle.type_of_vehicle),
+            "vehicle_category": v(m.vehicle.vehicle_category),
+            "make": v(m.vehicle.make),
+            "model": v(m.vehicle.model),
+            "variant": v(m.vehicle.variant),
+            "fuel_type": v(m.vehicle.fuel_type),
+            "cubic_capacity": v(m.vehicle.cubic_capacity),
+            "seat_including_driver": v(m.vehicle.seats_including_driver),
+            "registration_no": v(m.vehicle.registration_no),
+            "zone": v(m.vehicle.zone),
+            "reg_date": v(m.vehicle.registration_date),
+            "mfg_month": v(m.vehicle.mfg_month),
+            "mfg_year": v(m.vehicle.mfg_year),
+            "engine_no": v(m.vehicle.engine_no),
+            "chassis_no": v(m.vehicle.chassis_no),
+            "vehicle_color": v(m.vehicle.vehicle_color),
+            "number_of_tire": v(m.vehicle.number_of_tire),
+            "previous_policy_available": v(m.vehicle.previous_policy_available),
+        },
+        "new_policy_details": {
+            "insurer_name": v(m.policy.insurer_name),
+            "policy_type": v(m.policy.policy_type),
+            "policy_number": v(m.policy.policy_number),
+            "policy_issue_date": v(m.policy.policy_issue_date),
+            "policy_start_date": v(m.policy.policy_start_date),
+            "policy_end_date": v(m.policy.policy_end_date),
+            "idv_sum_assured": v(m.policy.idv_sum_assured),
+            "current_ncb": v(m.policy.current_ncb),
+            "active_tp_insurer_name": v(m.policy.active_tp_insurer_name),
+            "active_tp_policy_number": v(m.policy.active_tp_policy_number),
+            "active_tp_policy_start_date": v(m.policy.active_tp_policy_start_date),
+            "active_tp_policy_end_date": v(m.policy.active_tp_policy_end_date),
+            "financed": v(m.policy.financed),
+            "financed_by": v(m.policy.financed_by),
+            "add_ons": addon_map(m.policy.add_ons),
+        },
+        "premium_details": {
+            "own_damage_od_premium": v(m.premium.od_premium),
+            "net_premium": v(m.premium.net_premium),
+            "gst_cess": v(m.premium.gst_cess),
+            "final_premium": v(m.premium.final_premium),
+        },
+        "insured_details": {
+            "customer_type": v(m.insured_customer.customer_type),
+            "title": v(m.insured_customer.title),
+            "full_name": v(m.insured_customer.name),
+            "mobile_number": v(m.insured_customer.mobile),
+            "email": v(m.insured_customer.email),
+            "date_of_birth": v(m.insured_customer.dob),
+            "address": v(m.insured_customer.address),
+            "pincode": v(m.insured_customer.pincode),
+            "city_district": v(m.insured_customer.city_district),
+            "state": v(m.insured_customer.state),
+            "nominee_name": v(m.nominee.name),
+            "nominee_dob": v(m.nominee.dob),
+            "nominee_relationship": v(m.nominee.relationship),
+        },
+        "payment_details": {
+            "payment_status": v(m.payment.status),
+        },
+    }
+
+
+def health_ui(result: ExtractionEnvelope) -> dict:
+    assert result.health
+    h = result.health
+    primary = next((x for x in h.members if v(x.name) and v(x.name).strip().lower() == (v(h.insured_customer.name) or "").strip().lower()), None)
+    if primary is None and h.members:
+        primary = h.members[0]
+
+    other_members = [x for x in h.members if primary is not x]
+
+    return {
+        "basic_details": {
+            "lob_category": v(h.basic_details.lob_category),
+            "sub_lob_category": v(h.basic_details.sub_lob_category),
+            "business_type": v(h.basic_details.business_type),
+            "policy_type": v(h.basic_details.policy_type),
+            "senior_citizen_policy": v(h.basic_details.senior_citizen_policy),
+            "number_of_adult": v(h.basic_details.number_of_adult),
+            "number_of_child": v(h.basic_details.number_of_child),
+            "number_of_parent": v(h.basic_details.number_of_parent),
+            "eldest_person_age_type": v(h.basic_details.eldest_person_age_type),
+            "eldest_person_dob": v(h.basic_details.eldest_person_dob),
+            "treatment_zone": v(h.basic_details.treatment_zone),
+            "ped": v(h.basic_details.ped),
+            "previous_policy_available": v(h.basic_details.previous_policy_available),
+        },
+        "new_policy_details": {
+            "insurer_name": v(h.policy.insurer_name),
+            "plan_name": v(h.policy.plan_name),
+            "policy_number": v(h.policy.policy_number),
+            "policy_tenure": v(h.policy.policy_tenure),
+            "policy_issue_date": v(h.policy.policy_issue_date),
+            "policy_start_date": v(h.policy.policy_start_date),
+            "policy_end_date": v(h.policy.policy_end_date),
+            "base_sum_assured": v(h.policy.base_sum_assured),
+            "bonus_sum_assured": v(h.policy.bonus_sum_assured),
+            "total_sum_assured": v(h.policy.total_sum_assured),
+            "ppt": v(h.policy.ppt),
+            "renewal": v(h.policy.renewal),
+            "ppm_frequency": v(h.policy.ppm_frequency),
+            "optional_covers": [
+                {
+                    "name": x.name,
+                    "selected": x.selected,
+                    "option": x.option,
+                    "value": x.value,
+                }
+                for x in h.policy.optional_covers
+            ],
+            "riders": [
+                {
+                    "package_name": x.package_name,
+                    "rider_name": x.rider_name,
+                    "selected": x.selected,
+                    "coverage_limit": x.coverage_limit,
+                    "applicable_members": x.applicable_members,
+                }
+                for x in h.policy.riders
+            ],
+        },
+        "insured_details": {
+            "customer_type": v(h.insured_customer.customer_type),
+            "title": v(h.insured_customer.title),
+            "customer_name": v(h.insured_customer.name),
+            "customer_mobile": v(h.insured_customer.mobile),
+            "customer_email": v(h.insured_customer.email),
+            "customer_dob": v(h.insured_customer.dob),
+            "customer_pan": v(h.insured_customer.pan),
+            "customer_aadhaar": v(h.insured_customer.aadhaar),
+            "customer_gst_number": v(h.insured_customer.gst_number),
+            "customer_address": v(h.insured_customer.address),
+            "customer_pincode": v(h.insured_customer.pincode),
+            "city_district": v(h.insured_customer.city_district),
+            "state": v(h.insured_customer.state),
+            "primary_member": primary.model_dump() if primary else None,
+            "other_family_members": [x.model_dump() for x in other_members],
+        },
+        "nominee": {
+            "name": v(h.nominee.name),
+            "dob": v(h.nominee.dob),
+            "relationship": v(h.nominee.relationship),
+            "share_percent": v(h.nominee.share_percent),
+        },
+        "premium_details": {
+            "basic_premium": v(h.premium.basic_premium),
+            "other_premium": v(h.premium.other_premium),
+            "net_premium": v(h.premium.net_premium),
+            "gst_percent": v(h.premium.gst_percent),
+            "final_premium": v(h.premium.final_premium),
+            "installment_amount": v(h.premium.installment_amount),
+            "number_of_installment": v(h.premium.number_of_installment),
+            "initial_installment": v(h.premium.initial_installment),
+            "initial_received_amount": v(h.premium.initial_received_amount),
+        },
+        "payment_details": {
+            "payment_status": v(h.payment.status),
+        },
+        "medical_details": [
+            {
+                "question_id": q.question_id,
+                "question": q.question,
+                "answers_by_member": [v(a) for a in q.answers_by_member],
+                "details": q.details,
+            }
+            for q in h.medical_questions
+        ],
+        "previous_policies": [
+            {
+                "insurer_name": v(x.insurer_name),
+                "policy_number": v(x.policy_number),
+                "continuously_insured_since": v(x.continuously_insured_since),
+                "portability_requested": v(x.portability_requested),
+            }
+            for x in h.policy.previous_policies
+        ],
     }
 
 
 def to_ui_payload(result: ExtractionEnvelope) -> dict:
-    """Transform an ExtractionEnvelope into UI-ready dictionaries for INSecure frontend."""
-    payload: Dict[str, Any] = {
-        "document_type": result.document_type,
-        "document_type_confidence": result.document_type_confidence,
-        "review_required": len(result.global_conflicts) > 0,
-        "global_conflicts": [c.model_dump() for c in result.global_conflicts],
-        "global_notes": result.global_notes,
-    }
-
-    if result.document_type == "motor" and result.motor:
-        m = result.motor
-        payload["motor"] = {
-            "customer": {
-                "title": _val(m.insured_customer.title, ""),
-                "name": _val(m.insured_customer.name, ""),
-                "mobile": _val(m.insured_customer.mobile, ""),
-                "email": _val(m.insured_customer.email, ""),
-                "dob": _val(m.insured_customer.dob, ""),
-                "pan": _val(m.insured_customer.pan, ""),
-                "aadhaar": _val(m.insured_customer.aadhaar, ""),
-                "gstNumber": _val(m.insured_customer.gst_number, ""),
-                "address": _val(m.insured_customer.address, ""),
-                "pincode": _val(m.insured_customer.pincode, ""),
-                "city": _val(m.insured_customer.city_district, ""),
-                "state": _val(m.insured_customer.state, ""),
-                "customerType": _val(m.insured_customer.customer_type, "individual"),
-            },
-            "vehicle": {
-                "vehicleType": _val(m.vehicle.type_of_vehicle, "Private Car"),
-                "vehicleCategory": _val(m.vehicle.vehicle_category, "Private Car"),
-                "make": _val(m.vehicle.make, ""),
-                "model": _val(m.vehicle.model, ""),
-                "variant": _val(m.vehicle.variant, ""),
-                "fuelType": _val(m.vehicle.fuel_type, "Petrol"),
-                "cubicCapacity": _val(m.vehicle.cubic_capacity, ""),
-                "seatingCapacity": _val(m.vehicle.seats_including_driver, ""),
-                "registrationNumber": _val(m.vehicle.registration_no, ""),
-                "zone": _val(m.vehicle.zone, ""),
-                "registrationDate": _val(m.vehicle.registration_date, ""),
-                "manufacturingMonth": _val(m.vehicle.mfg_month, ""),
-                "manufacturingYear": _val(m.vehicle.mfg_year, ""),
-                "engineNumber": _val(m.vehicle.engine_no, ""),
-                "chassisNumber": _val(m.vehicle.chassis_no, ""),
-                "vehicleColor": _val(m.vehicle.vehicle_color, ""),
-                "numberOfTyres": _val(m.vehicle.number_of_tire, ""),
-                "financierName": _val(m.vehicle.financier, ""),
-                "financed": _val(m.vehicle.financed, "No") == "Yes",
-                "previousPolicyAvailable": _val(m.vehicle.previous_policy_available, "No") == "Yes",
-            },
-            "policy": {
-                "insurer": _val(m.policy.insurer_name, ""),
-                "policyType": _val(m.policy.policy_type, "Package Policy"),
-                "policyNumber": _val(m.policy.policy_number, ""),
-                "issueDate": _val(m.policy.policy_issue_date, ""),
-                "startDate": _val(m.policy.policy_start_date, ""),
-                "endDate": _val(m.policy.policy_end_date, ""),
-                "idv": _val(m.policy.idv_sum_assured, ""),
-                "ncb": _val(m.policy.current_ncb, "0"),
-                "activeTpInsurerName": _val(m.policy.active_tp_insurer_name, ""),
-                "activeTpPolicyNumber": _val(m.policy.active_tp_policy_number, ""),
-                "activeTpPolicyStartDate": _val(m.policy.active_tp_policy_start_date, ""),
-                "activeTpPolicyEndDate": _val(m.policy.active_tp_policy_end_date, ""),
-                "financed": _val(m.policy.financed, "No") == "Yes",
-                "financedBy": _val(m.policy.financed_by, ""),
-                "addons": [a.model_dump() for a in m.policy.add_ons],
-            },
-            "premium": {
-                "ownDamagePremium": _val(m.premium.od_premium, ""),
-                "basicPremium": _val(m.premium.net_premium, ""),
-                "gst": _val(m.premium.gst_cess, ""),
-                "finalPremium": _val(m.premium.final_premium, ""),
-            },
-            "nominee": {
-                "name": _val(m.nominee.name, ""),
-                "dob": _val(m.nominee.dob, ""),
-                "relation": _val(m.nominee.relationship, "Spouse"),
-                "share": _val(m.nominee.share_percent, "100"),
-                "address": _val(m.nominee.address, ""),
-                "mobile": _val(m.nominee.mobile, ""),
-                "email": _val(m.nominee.email, ""),
-            },
-            "payment": {
-                "paymentStatus": _val(m.payment.status, "completed"),
-                "paymentMethod": _val(m.payment.mode, "Online"),
-                "payerName": _val(m.payment.payer_name, ""),
-                "paymentAmount": _val(m.payment.amount_paid, ""),
-                "receiptNumber": _val(m.payment.receipt_number, ""),
-                "receiptDate": _val(m.payment.receipt_date, ""),
-            },
-            # Also provide field-level provenance object
-            "fields": {
-                "customer.name": _field_dict(m.insured_customer.name),
-                "customer.mobile": _field_dict(m.insured_customer.mobile),
-                "customer.email": _field_dict(m.insured_customer.email),
-                "customer.dob": _field_dict(m.insured_customer.dob),
-                "customer.pan": _field_dict(m.insured_customer.pan),
-                "customer.aadhaar": _field_dict(m.insured_customer.aadhaar),
-                "customer.address": _field_dict(m.insured_customer.address),
-                "customer.pincode": _field_dict(m.insured_customer.pincode),
-                "customer.city": _field_dict(m.insured_customer.city_district),
-                "customer.state": _field_dict(m.insured_customer.state),
-                "motor.registrationNumber": _field_dict(m.vehicle.registration_no),
-                "motor.make": _field_dict(m.vehicle.make),
-                "motor.model": _field_dict(m.vehicle.model),
-                "motor.variant": _field_dict(m.vehicle.variant),
-                "motor.fuelType": _field_dict(m.vehicle.fuel_type),
-                "motor.cubicCapacity": _field_dict(m.vehicle.cubic_capacity),
-                "motor.seatingCapacity": _field_dict(m.vehicle.seats_including_driver),
-                "motor.engineNumber": _field_dict(m.vehicle.engine_no),
-                "motor.chassisNumber": _field_dict(m.vehicle.chassis_no),
-                "motor.idv": _field_dict(m.policy.idv_sum_assured),
-                "motor.ncb": _field_dict(m.policy.current_ncb),
-                "policy.insurer": _field_dict(m.policy.insurer_name),
-                "policy.policyNumber": _field_dict(m.policy.policy_number),
-                "policy.policyType": _field_dict(m.policy.policy_type),
-                "policy.startDate": _field_dict(m.policy.policy_start_date),
-                "policy.endDate": _field_dict(m.policy.policy_end_date),
-                "premium.finalPremium": _field_dict(m.premium.final_premium),
-                "premium.basicPremium": _field_dict(m.premium.net_premium),
-                "premium.gst": _field_dict(m.premium.gst_cess),
-            }
-        }
-
-    elif result.document_type == "health" and result.health:
-        h = result.health
-        payload["health"] = {
-            "customer": {
-                "title": _val(h.insured_customer.title, ""),
-                "name": _val(h.insured_customer.name, ""),
-                "mobile": _val(h.insured_customer.mobile, ""),
-                "email": _val(h.insured_customer.email, ""),
-                "dob": _val(h.insured_customer.dob, ""),
-                "pan": _val(h.insured_customer.pan, ""),
-                "aadhaar": _val(h.insured_customer.aadhaar, ""),
-                "gstNumber": _val(h.insured_customer.gst_number, ""),
-                "address": _val(h.insured_customer.address, ""),
-                "pincode": _val(h.insured_customer.pincode, ""),
-                "city": _val(h.insured_customer.city_district, ""),
-                "state": _val(h.insured_customer.state, ""),
-                "customerType": _val(h.insured_customer.customer_type, "individual"),
-            },
-            "basic_details": {
-                "lobCategory": _val(h.basic_details.lob_category, "health"),
-                "subLobCategory": _val(h.basic_details.sub_lob_category, "family_floater"),
-                "businessType": _val(h.basic_details.business_type, "new"),
-                "policyType": _val(h.basic_details.policy_type, "Family Floater"),
-                "seniorCitizenPolicy": _val(h.basic_details.senior_citizen_policy, "No") == "Yes",
-                "numberOfAdult": _val(h.basic_details.number_of_adult, "1"),
-                "numberOfChild": _val(h.basic_details.number_of_child, "0"),
-                "numberOfParent": _val(h.basic_details.number_of_parent, "0"),
-                "eldestPersonAgeType": _val(h.basic_details.eldest_person_age_type, "DOB"),
-                "eldestPersonDob": _val(h.basic_details.eldest_person_dob, ""),
-                "treatmentZone": _val(h.basic_details.treatment_zone, ""),
-                "ped": _val(h.basic_details.ped, "No"),
-                "previousPolicyAvailable": _val(h.basic_details.previous_policy_available, "No") == "Yes",
-            },
-            "policy": {
-                "insurer": _val(h.policy.insurer_name, ""),
-                "productName": _val(h.policy.plan_name, ""),
-                "planName": _val(h.policy.plan_name, ""),
-                "policyNumber": _val(h.policy.policy_number, ""),
-                "tenureYears": _val(h.policy.policy_tenure, "1"),
-                "issueDate": _val(h.policy.policy_issue_date, ""),
-                "startDate": _val(h.policy.policy_start_date, ""),
-                "endDate": _val(h.policy.policy_end_date, ""),
-                "sumAssured": _val(h.policy.total_sum_assured or h.policy.base_sum_assured, ""),
-                "baseSumAssured": _val(h.policy.base_sum_assured, ""),
-                "bonusSumAssured": _val(h.policy.bonus_sum_assured, ""),
-                "ppt": _val(h.policy.ppt, "1"),
-                "renewal": _val(h.policy.renewal, ""),
-                "premiumFrequency": _val(h.policy.ppm_frequency, "yearly"),
-                "optionalCovers": [c.model_dump() for c in h.policy.optional_covers],
-                "riders": [r.model_dump() for r in h.policy.riders],
-                "previousPolicies": [p.model_dump() for p in h.policy.previous_policies],
-            },
-            "members": [
-                {
-                    "memberId": _val(mem.member_id, f"M-{i+1}"),
-                    "name": _val(mem.name, ""),
-                    "gender": _val(mem.gender, ""),
-                    "relationship": _val(mem.relationship, "Self"),
-                    "dob": _val(mem.dob, ""),
-                    "age": _val(mem.age, ""),
-                    "insuredSince": _val(mem.insured_since, ""),
-                    "heightCm": _val(mem.height_cm, ""),
-                    "weightKg": _val(mem.weight_kg, ""),
-                    "abhaNo": _val(mem.abha_no, ""),
-                    "sumInsured": _val(mem.sum_insured, ""),
-                    "aggregateDeductible": _val(mem.aggregate_deductible, ""),
-                    "maternityCare": _val(mem.maternity_care, "No"),
-                    "reductionMaternityWaitingPeriod": _val(mem.reduction_maternity_waiting_period, "No"),
-                }
-                for i, mem in enumerate(h.members)
-            ],
-            "medicalQuestions": [
-                {
-                    "questionId": q.question_id,
-                    "question": q.question,
-                    "answersByMember": [_val(a) for a in q.answers_by_member],
-                    "details": q.details,
-                    "evidence": [e.model_dump() for e in q.evidence],
-                }
-                for q in h.medical_questions
-            ],
-            "nominee": {
-                "name": _val(h.nominee.name, ""),
-                "dob": _val(h.nominee.dob, ""),
-                "relation": _val(h.nominee.relationship, "Spouse"),
-                "share": _val(h.nominee.share_percent, "100"),
-                "address": _val(h.nominee.address, ""),
-                "mobile": _val(h.nominee.mobile, ""),
-                "email": _val(h.nominee.email, ""),
-            },
-            "premium": {
-                "basicPremium": _val(h.premium.basic_premium, ""),
-                "otherPremium": _val(h.premium.other_premium, ""),
-                "netPremium": _val(h.premium.net_premium, ""),
-                "gst": _val(h.premium.gst_percent, ""),
-                "finalPremium": _val(h.premium.final_premium, ""),
-                "installmentAmount": _val(h.premium.installment_amount, ""),
-                "numberOfInstallment": _val(h.premium.number_of_installment, ""),
-                "initialInstallment": _val(h.premium.initial_installment, ""),
-                "initialReceivedAmount": _val(h.premium.initial_received_amount, ""),
-            },
-            "payment": {
-                "paymentStatus": _val(h.payment.status, "completed"),
-                "paymentMethod": _val(h.payment.mode, "Online"),
-                "payerName": _val(h.payment.payer_name, ""),
-                "paymentAmount": _val(h.payment.amount_paid, ""),
-                "receiptNumber": _val(h.payment.receipt_number, ""),
-                "receiptDate": _val(h.payment.receipt_date, ""),
-            },
-            "fields": {
-                "customer.name": _field_dict(h.insured_customer.name),
-                "customer.mobile": _field_dict(h.insured_customer.mobile),
-                "customer.email": _field_dict(h.insured_customer.email),
-                "customer.dob": _field_dict(h.insured_customer.dob),
-                "customer.pan": _field_dict(h.insured_customer.pan),
-                "customer.aadhaar": _field_dict(h.insured_customer.aadhaar),
-                "customer.address": _field_dict(h.insured_customer.address),
-                "customer.pincode": _field_dict(h.insured_customer.pincode),
-                "customer.city": _field_dict(h.insured_customer.city_district),
-                "customer.state": _field_dict(h.insured_customer.state),
-                "policy.insurer": _field_dict(h.policy.insurer_name),
-                "policy.planName": _field_dict(h.policy.plan_name),
-                "policy.policyNumber": _field_dict(h.policy.policy_number),
-                "policy.startDate": _field_dict(h.policy.policy_start_date),
-                "policy.endDate": _field_dict(h.policy.policy_end_date),
-                "policy.sumAssured": _field_dict(h.policy.total_sum_assured or h.policy.base_sum_assured),
-                "premium.finalPremium": _field_dict(h.premium.final_premium),
-                "premium.basicPremium": _field_dict(h.premium.basic_premium),
-                "premium.gst": _field_dict(h.premium.gst_percent),
-            }
-        }
-
-    return payload
+    return motor_ui(result) if result.document_type == "motor" else health_ui(result)
