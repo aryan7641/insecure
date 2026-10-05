@@ -191,27 +191,37 @@ class InsuranceExtractorProvider {
 
     // Deterministic Title-to-Gender derivation
     let derivedGender = '';
+    const rawTitle = cust.title?.value ? String(cust.title.value).toLowerCase().replace(/\./g, '').trim() : '';
+    const rawName = cust.name?.value ? String(cust.name.value).trim() : '';
     const rawGender = cust.gender?.value || (isHealth && resObj.members?.[0]?.gender?.value ? resObj.members[0].gender.value : null);
-    if (rawGender) {
-      const gLower = String(rawGender).toLowerCase().trim();
-      if (gLower.startsWith('m')) derivedGender = 'male';
-      else if (gLower.startsWith('f')) derivedGender = 'female';
-      else if (gLower === 'other') derivedGender = 'other';
-      else derivedGender = gLower;
-    } else if (cust.title?.value) {
-      const tLower = String(cust.title.value).toLowerCase().replace('.', '').trim();
-      if (tLower === 'mr') derivedGender = 'male';
-      else if (['mrs', 'ms', 'miss'].includes(tLower)) derivedGender = 'female';
+
+    if (['mr', 'shri', 'master', 'mister'].includes(rawTitle)) {
+      derivedGender = 'male';
+    } else if (['mrs', 'ms', 'miss', 'smt', 'kumari'].includes(rawTitle)) {
+      derivedGender = 'female';
+    } else {
+      const namePrefixMatch = rawName.match(/^(mr|mrs|ms|miss|shri|smt|master)\b\.?\s*/i);
+      if (namePrefixMatch) {
+        const prefix = namePrefixMatch[1].toLowerCase();
+        if (['mr', 'shri', 'master'].includes(prefix)) derivedGender = 'male';
+        else if (['mrs', 'ms', 'miss', 'smt'].includes(prefix)) derivedGender = 'female';
+      } else if (rawGender) {
+        const gLower = String(rawGender).toLowerCase().trim();
+        if (gLower.startsWith('m')) derivedGender = 'male';
+        else if (gLower.startsWith('f')) derivedGender = 'female';
+        else if (gLower === 'other') derivedGender = 'other';
+        else derivedGender = gLower;
+      }
     }
 
     // Build structured extractedData with exact frontend keys
     const customer = {
-      title: this._field(cust.title, ''),
+      title: this._field(cust.title, derivedGender === 'male' ? 'Mr.' : (derivedGender === 'female' ? 'Mrs.' : '')),
       name: this._field(cust.name, ''),
       mobile: this._field(cust.mobile, ''),
       email: this._field(cust.email, ''),
       dob: this._dateField(cust.dob, ''),
-      gender: this._field(cust.gender?.value ? cust.gender : (derivedGender ? { value: derivedGender, source: 'derived', confidence: 0.98 } : null), derivedGender),
+      gender: this._field(derivedGender ? { value: derivedGender, source: 'derived', confidence: 0.98 } : cust.gender, derivedGender),
       pan: this._field(cust.pan, ''),
       aadhaar: this._field(cust.aadhaar, ''),
       gstNumber: this._field(cust.gst_number, ''),

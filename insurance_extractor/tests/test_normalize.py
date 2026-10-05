@@ -133,4 +133,17 @@ def test_motor_gender_derived_in_envelope():
     assert r.motor.insured_customer.gender.value == "Male"
 
 
+def test_motor_gender_mrs_derived_in_envelope():
+    m = MotorExtraction(
+        vehicle=MotorVehicle(), policy=MotorPolicy(),
+        premium=MotorPremium(),
+        insured_customer=InsuredCustomer(name=ef("MRS. PRIYA SHARMA", "document")),
+        nominee=Nominee(), payment=PaymentDetails()
+    )
+    r = normalize_extraction(ExtractionEnvelope(document_type="motor", document_type_confidence=1, motor=m))
+    assert r.motor.insured_customer.title.value == "Mrs."
+    assert r.motor.insured_customer.gender.value == "Female"
+
+
+
 

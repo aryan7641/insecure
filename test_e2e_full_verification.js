@@ -65,8 +65,8 @@ async function runVerification() {
   console.log('- Address:', motorExtracted.extractedData?.customer?.address?.value);
   console.log('- Registration:', motorExtracted.extractedData?.motor?.registrationNumber?.value);
 
-  if (motorExtracted.extractedData?.customer?.gender?.value !== 'Male') {
-    throw new Error(`Expected Gender 'Male' from Mr. Paras Kumawat, got: ${motorExtracted.extractedData?.customer?.gender?.value}`);
+  if ((motorExtracted.extractedData?.customer?.gender?.value || '').toLowerCase() !== 'male') {
+    throw new Error(`Expected Gender 'male' from Mr. Paras Kumawat, got: ${motorExtracted.extractedData?.customer?.gender?.value}`);
   }
   if (motorExtracted.extractedData?.customer?.address?.value?.includes('\n')) {
     throw new Error(`Address contains line break: ${motorExtracted.extractedData?.customer?.address?.value}`);
@@ -139,8 +139,8 @@ async function runVerification() {
   console.log('- Gender:', healthExtracted.extractedData?.customer?.gender?.value);
   console.log('- Address:', healthExtracted.extractedData?.customer?.address?.value);
 
-  if (healthExtracted.extractedData?.customer?.gender?.value !== 'Male') {
-    throw new Error(`Expected Gender 'Male' from Mr. Kamal Sharma, got: ${healthExtracted.extractedData?.customer?.gender?.value}`);
+  if ((healthExtracted.extractedData?.customer?.gender?.value || '').toLowerCase() !== 'male') {
+    throw new Error(`Expected Gender 'male' from Mr. Kamal Sharma, got: ${healthExtracted.extractedData?.customer?.gender?.value}`);
   }
 
   // Confirm Health Policy WITHOUT commission (empty)
