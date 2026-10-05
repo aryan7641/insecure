@@ -3,7 +3,7 @@ from insurance_extractor.models import (
     InsuredCustomer, Nominee, HealthPolicy, HealthPremium, PaymentDetails,
     ExtractedField, MotorExtraction, MotorVehicle, MotorPolicy, MotorPremium
 )
-from insurance_extractor.normalize import normalize_extraction
+from insurance_extractor.normalize import normalize_extraction, normalize_address_for_ui
 
 
 def ef(value=None, source="not_found"):
@@ -40,3 +40,38 @@ def test_dates_are_normalized():
     )
     r = normalize_extraction(ExtractionEnvelope(document_type="motor", document_type_confidence=1, motor=m))
     assert r.motor.policy.policy_issue_date.value == "2026-09-25"
+
+
+def test_address_is_normalized_for_ui():
+    m = MotorExtraction(
+        vehicle=MotorVehicle(), policy=MotorPolicy(),
+        premium=MotorPremium(),
+        insured_customer=InsuredCustomer(address=ef("A 4 KUMAWAT COLONY\r\nKHATIPURA ROAD\nJHOTWARA\tJAIPUR", "document")),
+        nominee=Nominee(), payment=PaymentDetails()
+    )
+    r = normalize_extraction(ExtractionEnvelope(document_type="motor", document_type_confidence=1, motor=m))
+    assert r.motor.insured_customer.address.value == "A 4 KUMAWAT COLONY KHATIPURA ROAD JHOTWARA JAIPUR"
+
+
+def test_motor_address_line_break():
+    assert normalize_address_for_ui(
+        "A 4 KUMAWAT COLONY KHATIPURA\nROAD JHOTWARA JAIPUR"
+    ) == "A 4 KUMAWAT COLONY KHATIPURA ROAD JHOTWARA JAIPUR"
+
+
+def test_health_address_line_breaks():
+    assert normalize_address_for_ui(
+        "33, SHRI GOVIND NAGAR\n1ST JHOTWARA NIWAROO\nJAIPUR RAJASTHAN 302012"
+    ) == "33, SHRI GOVIND NAGAR 1ST JHOTWARA NIWAROO JAIPUR RAJASTHAN 302012"
+
+
+def test_address_multiple_spaces():
+    assert normalize_address_for_ui(
+        "A  4   KUMAWAT   COLONY"
+    ) == "A 4 KUMAWAT COLONY"
+
+
+def test_address_none():
+    assert normalize_address_for_ui(None) is None
+
+

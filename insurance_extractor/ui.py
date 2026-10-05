@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .models import ExtractionEnvelope, ExtractedField, AddOn
+from .normalize import normalize_address_for_ui
 
 
 def v(f: ExtractedField | None):
@@ -99,13 +100,14 @@ def motor_ui(result: ExtractionEnvelope) -> dict:
             "mobile_number": v(m.insured_customer.mobile),
             "email": v(m.insured_customer.email),
             "date_of_birth": v(m.insured_customer.dob),
-            "address": v(m.insured_customer.address),
+            "address": normalize_address_for_ui(v(m.insured_customer.address)),
             "pincode": v(m.insured_customer.pincode),
             "city_district": v(m.insured_customer.city_district),
             "state": v(m.insured_customer.state),
             "nominee_name": v(m.nominee.name),
             "nominee_dob": v(m.nominee.dob),
             "nominee_relationship": v(m.nominee.relationship),
+            "nominee_address": normalize_address_for_ui(v(m.nominee.address)),
         },
         "payment_details": {
             "payment_status": v(m.payment.status),
@@ -182,7 +184,7 @@ def health_ui(result: ExtractionEnvelope) -> dict:
             "customer_pan": v(h.insured_customer.pan),
             "customer_aadhaar": v(h.insured_customer.aadhaar),
             "customer_gst_number": v(h.insured_customer.gst_number),
-            "customer_address": v(h.insured_customer.address),
+            "customer_address": normalize_address_for_ui(v(h.insured_customer.address)),
             "customer_pincode": v(h.insured_customer.pincode),
             "city_district": v(h.insured_customer.city_district),
             "state": v(h.insured_customer.state),
@@ -194,6 +196,7 @@ def health_ui(result: ExtractionEnvelope) -> dict:
             "dob": v(h.nominee.dob),
             "relationship": v(h.nominee.relationship),
             "share_percent": v(h.nominee.share_percent),
+            "nominee_address": normalize_address_for_ui(v(h.nominee.address)),
         },
         "premium_details": {
             "basic_premium": v(h.premium.basic_premium),

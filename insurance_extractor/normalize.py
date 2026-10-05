@@ -52,6 +52,35 @@ def normalize_amount(value: str | None) -> str | None:
     return m.group(0) if m else None
 
 
+import unicodedata
+
+ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalize_address_for_ui(text: str | None) -> str | None:
+    if text is None:
+        return None
+
+    value = unicodedata.normalize("NFKC", str(text))
+    value = ZERO_WIDTH_RE.sub("", value)
+    value = value.replace("\u00a0", " ")
+
+    # CRITICAL: convert PDF line breaks to REAL spaces
+    value = value.replace("\r\n", " ")
+    value = value.replace("\r", " ")
+    value = value.replace("\n", " ")
+    value = value.replace("\u2028", " ")
+    value = value.replace("\u2029", " ")
+
+    value = CONTROL_RE.sub(" ", value)
+
+    # Collapse whitespace, never remove it
+    value = re.sub(r"[ \t\f\v]+", " ", value)
+
+    return value.strip() or None
+
+
 def normalize_extraction(result: ExtractionEnvelope) -> ExtractionEnvelope:
     for path, field in iter_fields(result):
         lower = path.lower()
@@ -61,6 +90,8 @@ def normalize_extraction(result: ExtractionEnvelope) -> ExtractionEnvelope:
             field.value = normalize_phone(field.value)
         if "email" in lower:
             field.value = normalize_email(field.value)
+        if "address" in lower:
+            field.value = normalize_address_for_ui(field.value)
         if any(x in lower for x in ("premium", "sum_assured", "idv", "share_percent", "amount", "cubic_capacity", "height_cm", "weight_kg", "age", "ppt", "number_of")):
             field.value = normalize_amount(field.value)
         if any(x in lower for x in ("previous_policy_available", "senior_citizen_policy", "ped", "financed", "maternity_care", "reduction_maternity_waiting_period", "renewal", "portability_requested")):
