@@ -81,6 +81,58 @@ def normalize_address_for_ui(text: str | None) -> str | None:
     return value.strip() or None
 
 
+TITLE_GENDER_MAP = {
+    "mr": "Male",
+    "mr.": "Male",
+    "mrs": "Female",
+    "mrs.": "Female",
+    "ms": "Female",
+    "ms.": "Female",
+    "miss": "Female",
+    "miss.": "Female",
+}
+
+
+def normalize_gender_from_title(title: str | None, existing_gender: str | None = None) -> tuple[str | None, Conflict | None]:
+    """
+    Deterministic Title-to-Gender mapping:
+    - MR / MR. -> Male
+    - MRS / MRS. -> Female
+    - MS / MS. -> Female
+    - MISS / MISS. -> Female
+    - DR / DR. -> Do NOT infer gender (return existing_gender if present)
+    - Consistency check: If extracted gender conflicts with title, title takes precedence and a Conflict is returned.
+    """
+    clean_title = (title or "").strip().lower()
+    expected_gender = TITLE_GENDER_MAP.get(clean_title)
+
+    norm_existing = None
+    if existing_gender:
+        g = existing_gender.strip().lower()
+        if g in {"m", "male", "man"}:
+            norm_existing = "Male"
+        elif g in {"f", "female", "woman"}:
+            norm_existing = "Female"
+        elif g in {"o", "other"}:
+            norm_existing = "Other"
+        else:
+            norm_existing = existing_gender.strip().capitalize()
+
+    if expected_gender:
+        if norm_existing and norm_existing != expected_gender:
+            conflict = Conflict(
+                field="gender",
+                values=[existing_gender, expected_gender],
+                pages=[],
+                explanation=f"Gender '{existing_gender}' conflicts with title '{title}'. Title indicates '{expected_gender}'."
+            )
+            return expected_gender, conflict
+        return expected_gender, None
+
+    # Title is not in deterministic map (e.g. Dr., Shri, or None). Do not infer new gender.
+    return norm_existing, None
+
+
 def normalize_extraction(result: ExtractionEnvelope) -> ExtractionEnvelope:
     for path, field in iter_fields(result):
         lower = path.lower()
@@ -103,11 +155,76 @@ def normalize_extraction(result: ExtractionEnvelope) -> ExtractionEnvelope:
         _derive_health_ped(result.health)
         _derive_health_senior_citizen(result.health)
         _derive_health_title(result.health)
+        _normalize_health_gender(result.health, result)
     if result.health and result.health.basic_details.treatment_zone.value:
         result.health.basic_details.treatment_zone.value = re.sub(r"^zone\s+", "", result.health.basic_details.treatment_zone.value, flags=re.I).strip()
     if result.motor:
         _normalize_motor_registration(result.motor)
+        _normalize_motor_gender(result.motor, result)
     return result
+
+
+def _normalize_motor_gender(motor, result: ExtractionEnvelope) -> None:
+    cust = motor.insured_customer
+    if not cust:
+        return
+    if not cust.title.value and cust.name.value:
+        m_title = re.match(r"^(MR|MRS|MS|MISS|DR)\.?\b", cust.name.value.strip(), re.I)
+        if m_title:
+            t_val = m_title.group(0).capitalize()
+            if not t_val.endswith("."):
+                t_val += "."
+            set_field(cust.title, t_val, "derived", 0.95, cust.name.evidence, "Extracted from customer name prefix")
+
+    title_val = cust.title.value
+    existing_g = cust.gender.value if cust.gender.value else None
+    new_gender, conflict = normalize_gender_from_title(title_val, existing_g)
+    if new_gender:
+        ev = cust.title.evidence or cust.gender.evidence or cust.name.evidence
+        set_field(cust.gender, new_gender, "derived" if not existing_g else cust.gender.source, 0.98, ev, f"Derived from title '{title_val}'" if title_val else None)
+        if conflict:
+            cust.gender.requires_review = True
+            result.global_conflicts.append(conflict)
+
+
+def _normalize_health_gender(health: HealthExtraction, result: ExtractionEnvelope) -> None:
+    cust = health.insured_customer
+    if cust:
+        if not cust.title.value and cust.name.value:
+            m_title = re.match(r"^(MR|MRS|MS|MISS|DR)\.?\b", cust.name.value.strip(), re.I)
+            if m_title:
+                t_val = m_title.group(0).capitalize()
+                if not t_val.endswith("."):
+                    t_val += "."
+                set_field(cust.title, t_val, "derived", 0.95, cust.name.evidence, "Extracted from customer name prefix")
+
+        title_val = cust.title.value
+        existing_g = cust.gender.value if cust.gender.value else None
+        new_gender, conflict = normalize_gender_from_title(title_val, existing_g)
+        if new_gender:
+            ev = cust.title.evidence or cust.gender.evidence or cust.name.evidence
+            set_field(cust.gender, new_gender, "derived" if not existing_g else cust.gender.source, 0.98, ev, f"Derived from title '{title_val}'" if title_val else None)
+            if conflict:
+                cust.gender.requires_review = True
+                result.global_conflicts.append(conflict)
+
+    for m in health.members:
+        member_title = None
+        if m.name.value:
+            m_title = re.match(r"^(MR|MRS|MS|MISS|DR)\.?\b", m.name.value.strip(), re.I)
+            if m_title:
+                member_title = m_title.group(0).capitalize()
+                if not member_title.endswith("."):
+                    member_title += "."
+        
+        m_gender_val = m.gender.value if m.gender.value else None
+        new_g, conf = normalize_gender_from_title(member_title, m_gender_val)
+        if new_g:
+            ev = m.gender.evidence or m.name.evidence
+            set_field(m.gender, new_g, "derived" if not m_gender_val else m.gender.source, 0.98, ev, f"Derived from member title '{member_title}'" if member_title else None)
+            if conf:
+                m.gender.requires_review = True
+                result.global_conflicts.append(conf)
 
 
 def _derive_health_counts(health: HealthExtraction) -> None:

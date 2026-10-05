@@ -75,3 +75,62 @@ def test_address_none():
     assert normalize_address_for_ui(None) is None
 
 
+def test_gender_from_title_mr():
+    from insurance_extractor.normalize import normalize_gender_from_title
+    gender, conflict = normalize_gender_from_title("Mr.", None)
+    assert gender == "Male"
+    assert conflict is None
+
+    gender, conflict = normalize_gender_from_title("MR", None)
+    assert gender == "Male"
+    assert conflict is None
+
+
+def test_gender_from_title_mrs_ms_miss():
+    from insurance_extractor.normalize import normalize_gender_from_title
+    for t in ["Mrs.", "MRS", "Ms.", "MS", "Miss", "MISS"]:
+        gender, conflict = normalize_gender_from_title(t, None)
+        assert gender == "Female"
+        assert conflict is None
+
+
+def test_gender_from_title_dr_does_not_infer():
+    from insurance_extractor.normalize import normalize_gender_from_title
+    gender, conflict = normalize_gender_from_title("Dr.", None)
+    assert gender is None
+    assert conflict is None
+
+    gender, conflict = normalize_gender_from_title("Dr.", "Male")
+    assert gender == "Male"
+    assert conflict is None
+
+
+def test_gender_from_title_conflict():
+    from insurance_extractor.normalize import normalize_gender_from_title
+    # Title is Mr. but extracted gender was Female
+    gender, conflict = normalize_gender_from_title("Mr.", "Female")
+    assert gender == "Male"
+    assert conflict is not None
+    assert conflict.field == "gender"
+    assert conflict.values == ["Female", "Male"]
+
+    # Title is Mrs. but extracted gender was Male
+    gender, conflict = normalize_gender_from_title("Mrs.", "Male")
+    assert gender == "Female"
+    assert conflict is not None
+    assert conflict.field == "gender"
+
+
+def test_motor_gender_derived_in_envelope():
+    m = MotorExtraction(
+        vehicle=MotorVehicle(), policy=MotorPolicy(),
+        premium=MotorPremium(),
+        insured_customer=InsuredCustomer(name=ef("MR. RAHUL SHARMA", "document")),
+        nominee=Nominee(), payment=PaymentDetails()
+    )
+    r = normalize_extraction(ExtractionEnvelope(document_type="motor", document_type_confidence=1, motor=m))
+    assert r.motor.insured_customer.title.value == "Mr."
+    assert r.motor.insured_customer.gender.value == "Male"
+
+
+

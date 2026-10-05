@@ -96,6 +96,7 @@ def motor_ui(result: ExtractionEnvelope) -> dict:
         "insured_details": {
             "customer_type": v(m.insured_customer.customer_type),
             "title": v(m.insured_customer.title),
+            "gender": v(m.insured_customer.gender),
             "full_name": v(m.insured_customer.name),
             "mobile_number": v(m.insured_customer.mobile),
             "email": v(m.insured_customer.email),
@@ -177,6 +178,7 @@ def health_ui(result: ExtractionEnvelope) -> dict:
         "insured_details": {
             "customer_type": v(h.insured_customer.customer_type),
             "title": v(h.insured_customer.title),
+            "gender": v(h.insured_customer.gender) or (v(primary.gender) if primary else None),
             "customer_name": v(h.insured_customer.name),
             "customer_mobile": v(h.insured_customer.mobile),
             "customer_email": v(h.insured_customer.email),

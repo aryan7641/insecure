@@ -19,6 +19,7 @@ router.use('/agencies/:agencyId/templates', require('./template.routes'));
 router.use('/agencies/:agencyId/imports', require('./import.routes'));
 router.use('/agencies/:agencyId/analytics', require('./analytics.routes'));
 router.use('/agencies/:agencyId/activity', require('./activity.routes'));
+router.use('/agencies/:agencyId/commissions', require('./commission.routes'));
 router.use('/agencies/:agencyId/audit-logs', require('./auditLog.routes'));
 router.use('/agencies/:agencyId/document-requirements', require('./documentRequirement.routes'));
 

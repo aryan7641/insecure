@@ -189,6 +189,21 @@ class InsuranceExtractorProvider {
 
     const detectedInsurerVal = pol.insurer_name?.value || (isHealth ? 'TATA AIG General Insurance Company Limited' : 'United India Insurance Company Limited');
 
+    // Deterministic Title-to-Gender derivation
+    let derivedGender = '';
+    const rawGender = cust.gender?.value || (isHealth && resObj.members?.[0]?.gender?.value ? resObj.members[0].gender.value : null);
+    if (rawGender) {
+      const gLower = String(rawGender).toLowerCase().trim();
+      if (gLower.startsWith('m')) derivedGender = 'male';
+      else if (gLower.startsWith('f')) derivedGender = 'female';
+      else if (gLower === 'other') derivedGender = 'other';
+      else derivedGender = gLower;
+    } else if (cust.title?.value) {
+      const tLower = String(cust.title.value).toLowerCase().replace('.', '').trim();
+      if (tLower === 'mr') derivedGender = 'male';
+      else if (['mrs', 'ms', 'miss'].includes(tLower)) derivedGender = 'female';
+    }
+
     // Build structured extractedData with exact frontend keys
     const customer = {
       title: this._field(cust.title, ''),
@@ -196,7 +211,7 @@ class InsuranceExtractorProvider {
       mobile: this._field(cust.mobile, ''),
       email: this._field(cust.email, ''),
       dob: this._dateField(cust.dob, ''),
-      gender: this._field(cust.gender || (isHealth && resObj.members?.[0]?.gender ? resObj.members[0].gender : null), ''),
+      gender: this._field(cust.gender?.value ? cust.gender : (derivedGender ? { value: derivedGender, source: 'derived', confidence: 0.98 } : null), derivedGender),
       pan: this._field(cust.pan, ''),
       aadhaar: this._field(cust.aadhaar, ''),
       gstNumber: this._field(cust.gst_number, ''),

@@ -9,7 +9,7 @@ const extractionJobSchema = new Schema(
     insuranceSubtype: { type: String, trim: true },
     status: {
       type: String,
-      enum: ['uploaded', 'classifying', 'extracting', 'review_required', 'confirmed', 'failed'],
+      enum: ['uploaded', 'classifying', 'extracting', 'extracted', 'review_required', 'confirmed', 'failed'],
       default: 'uploaded'
     },
     rawText: String,

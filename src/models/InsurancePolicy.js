@@ -26,14 +26,14 @@ const insurancePolicySchema = new Schema(
     planName: { type: String, trim: true },
     
     // Controlled Taxonomy Architecture
-    insuranceType: { type: String, enum: ['health', 'motor', 'life', 'general', 'other'], default: 'health' },
+    insuranceType: { type: String, trim: true, lowercase: true, default: 'health' },
     insuranceSubtype: { type: String, trim: true, default: 'individual_health' },
     
     // Legacy mapping compatibility
     policyType: { type: String, trim: true, default: 'health' },
     lob: { type: String, trim: true },
     subLob: { type: String, trim: true },
-    businessType: { type: String, enum: ['new', 'renewal', 'rollover', 'portability', 'other'], default: 'new' },
+    businessType: { type: String, trim: true, lowercase: true, default: 'new' },
     
     // Dates & Tenure
     issueDate: Date,

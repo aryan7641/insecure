@@ -127,6 +127,7 @@ class InsuredCustomer(BaseModel):
     mobile: ExtractedField = Field(default_factory=ExtractedField)
     email: ExtractedField = Field(default_factory=ExtractedField)
     dob: ExtractedField = Field(default_factory=ExtractedField)
+    gender: ExtractedField = Field(default_factory=ExtractedField)
     pan: ExtractedField = Field(default_factory=ExtractedField)
     aadhaar: ExtractedField = Field(default_factory=ExtractedField)
     gst_number: ExtractedField = Field(default_factory=ExtractedField)

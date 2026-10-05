@@ -22,8 +22,8 @@ const customerSchema = new Schema(
     mobile: { type: String, required: true, trim: true },
     email: { type: String, lowercase: true, trim: true },
     dob: Date,
-    gender: { type: String, enum: ['male', 'female', 'other', ''], trim: true },
-    customerType: { type: String, enum: ['individual', 'corporate', 'hni', 'retail', ''], default: 'individual' },
+    gender: { type: String, trim: true, lowercase: true },
+    customerType: { type: String, trim: true, lowercase: true, default: 'individual' },
     address: {
       street: String,
       city: String,

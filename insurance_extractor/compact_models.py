@@ -62,6 +62,7 @@ class CompactMotorOutput(BaseModel):
     final_premium: Optional[str] = None
     customer_type: Optional[str] = None
     title: Optional[str] = None
+    customer_gender: Optional[str] = None
     customer_name: Optional[str] = None
     customer_mobile: Optional[str] = None
     customer_email: Optional[str] = None
@@ -143,6 +144,7 @@ class CompactHealthOutput(BaseModel):
     ppm_frequency: Optional[str] = None
     customer_type: Optional[str] = None
     title: Optional[str] = None
+    customer_gender: Optional[str] = None
     customer_name: Optional[str] = None
     customer_mobile: Optional[str] = None
     customer_email: Optional[str] = None

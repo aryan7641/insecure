@@ -6,6 +6,8 @@ const { setAgencyContext } = require('../middleware/agencyContext');
 const { checkResourceAccess } = require('../middleware/resourceAccess');
 const { ROLES } = require('../utils/constants');
 
+const commissionController = require('../controllers/commission.controller');
+
 router.use(authenticate);
 router.use(setAgencyContext);
 
@@ -16,5 +18,11 @@ router.get('/:policyId', checkResourceAccess('policy'), insurancePolicyControlle
 router.put('/:policyId', checkResourceAccess('policy'), insurancePolicyController.update);
 router.post('/:policyId/renew', checkResourceAccess('policy'), insurancePolicyController.renew);
 router.delete('/:policyId', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), insurancePolicyController.delete);
+
+// Policy commission management
+router.get('/:policyId/commission', commissionController.getByPolicyId);
+router.post('/:policyId/commission', commissionController.upsertCommission);
+router.put('/:policyId/commission', commissionController.upsertCommission);
+router.delete('/:policyId/commission', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), commissionController.deleteCommission);
 
 module.exports = router;

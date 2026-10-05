@@ -11,6 +11,7 @@ const { getInsuranceLlmExtractor } = require('../providers/llm/insuranceLlmExtra
 const { getSubtypeSchema } = require('../schemas/insuranceSubtypeSchemas');
 const { normalizePolicyPayload } = require('./insuranceSchema.service');
 const duplicateDetectionService = require('./duplicateDetection.service');
+const commissionService = require('./commission.service');
 const activityService = require('./activity.service');
 const auditLogService = require('./auditLog.service');
 const { NotFoundError, ConflictError, ValidationError } = require('../utils/apiError');
@@ -303,6 +304,7 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     existingCustomerId,
     customerData = {},
     policyData = {},
+    commissionData,
     subtype = 'individual_health'
   } = confirmationPayload;
 
@@ -321,7 +323,7 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     if (customerData.mobile) customer.mobile = customerData.mobile.trim();
     if (customerData.email) customer.email = customerData.email.trim();
     if (customerData.dob) customer.dob = customerData.dob;
-    if (customerData.gender) customer.gender = customerData.gender;
+    if (customerData.gender) customer.gender = customerData.gender.toLowerCase().trim();
     if (customerData.pan) customer.pan = customerData.pan.trim().toUpperCase();
     if (customerData.aadhaar) customer.aadhaar = customerData.aadhaar.trim();
     if (customerData.address) customer.address = typeof customerData.address === 'object' ? customerData.address : { street: customerData.address, country: 'India' };
@@ -349,14 +351,14 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
         mobile: cleanedMobile,
         email: customerData.email?.trim() || undefined,
         dob: customerData.dob || undefined,
-        gender: customerData.gender || undefined,
+        gender: customerData.gender ? customerData.gender.toLowerCase().trim() : undefined,
         pan: customerData.pan?.trim()?.toUpperCase() || undefined,
         aadhaar: customerData.aadhaar?.trim() || undefined,
         address: typeof customerData.address === 'object' ? customerData.address : { street: customerData.address || '', country: 'India' },
         city: customerData.city || undefined,
         state: customerData.state || undefined,
         pincode: customerData.pincode || undefined,
-        customerType: customerData.customerType || 'individual',
+        customerType: customerData.customerType ? customerData.customerType.toLowerCase().trim() : 'individual',
         notes: customerData.notes || undefined,
         tags: customerData.tags || [],
         nominee: customerData.nominee || undefined,
@@ -460,18 +462,28 @@ const confirmPolicyFromOcr = async (agencyId, docId, confirmationPayload, user) 
     await auditLogService.createLog(agencyId, 'InsurancePolicy', newPolicy._id, 'CREATE_FROM_OCR', null, newPolicy.toObject(), user.userId);
   }
 
-  if (activityService && activityService.logActivity) {
-    await activityService.logActivity(agencyId, ACTIVITY_TYPES.POLICY_CREATED, {
-      policyId: newPolicy._id,
-      customerId: customer._id,
-      performedBy: user.userId,
-      description: `Policy ${newPolicy.policyNumber} (${newPolicy.subLob || newPolicy.insuranceSubtype}) created from verified PDF extraction`
-    });
+  // 6. Policy Commission
+  let commissionRecord = null;
+  const hasCommission = commissionData && (
+    Number(commissionData.commissionPercentage) > 0 ||
+    Number(commissionData.rate) > 0 ||
+    Number(commissionData.commissionRate) > 0 ||
+    Number(commissionData.commissionAmount) > 0 ||
+    Number(commissionData.flatAmount) > 0 ||
+    Number(commissionData.amount) > 0
+  );
+  if (hasCommission) {
+    try {
+      commissionRecord = await commissionService.upsertCommission(agencyId, newPolicy._id, commissionData, user);
+    } catch (commErr) {
+      console.warn('[OCR Service] Error saving initial policy commission:', commErr.message);
+    }
   }
 
   return {
     customer,
     policy: newPolicy,
+    commission: commissionRecord,
     document
   };
 };
