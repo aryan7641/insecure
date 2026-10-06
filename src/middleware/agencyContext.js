@@ -20,9 +20,10 @@ const setAgencyContext = (req, res, next) => {
 
   const belongsToAgency = req.user.role === 'super_admin' || 
     (req.user.agencies && req.user.agencies.some(a => {
-      const aId = a.agencyId._id || a.agencyId;
+      const aId = a.agencyId?._id || a.agencyId;
       return aId && aId.toString() === agencyId.toString();
-    }));
+    })) ||
+    (req.user.activeAgencyId && req.user.activeAgencyId.toString() === agencyId.toString());
 
   if (!belongsToAgency) {
     return next(new AuthorizationError('You do not have access to this agency'));

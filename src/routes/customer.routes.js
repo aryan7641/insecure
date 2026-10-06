@@ -12,12 +12,12 @@ router.use(setAgencyContext);
 router.post('/', customerController.create);
 router.get('/', customerController.list);
 router.get('/check-duplicate', customerController.checkDuplicate);
-router.post('/merge', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), customerController.merge);
+router.post('/merge', authorize(ROLES.ADMIN, 'super_admin'), customerController.merge);
 
 router.get('/:customerId', checkResourceAccess('customer'), customerController.getById);
 router.put('/:customerId', checkResourceAccess('customer'), customerController.update);
-router.delete('/:customerId', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), customerController.delete);
-router.post('/:customerId/assign', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), customerController.assign);
+router.delete('/:customerId', authorize(ROLES.ADMIN, 'super_admin'), customerController.delete);
+router.post('/:customerId/assign', authorize(ROLES.ADMIN, 'super_admin'), customerController.assign);
 router.get('/:customerId/analytics', checkResourceAccess('customer'), customerController.getAnalytics);
 router.get('/:customerId/documents/status', checkResourceAccess('customer'), customerController.getDocumentStatus);
 
