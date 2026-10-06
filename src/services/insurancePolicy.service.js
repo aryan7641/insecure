@@ -202,22 +202,31 @@ exports.update = async (policyId, agencyId, data, user) => {
 };
 
 exports.delete = async (policyId, agencyId, user) => {
-  const policy = await InsurancePolicy.findOne({ _id: policyId, agencyId, isDeleted: false });
+  const policy = await InsurancePolicy.findOne({ _id: policyId, agencyId });
   if (!policy) throw new NotFoundError('Policy not found');
 
-  policy.isDeleted = true;
-  policy.deletedAt = new Date();
-  policy.deletedBy = user.userId;
-  await policy.save();
+  const oldData = policy.toObject();
 
-  // Cancel pending renewal follow-ups
-  await FollowUp.updateMany(
-    { relatedPolicyId: policyId, agencyId, status: FOLLOW_UP_STATUSES.PENDING },
-    { $set: { status: 'cancelled' } }
-  );
+  // Delete associated commission records
+  const PolicyCommission = require('../models/PolicyCommission');
+  if (PolicyCommission) {
+    await PolicyCommission.deleteMany({ policyId, agencyId });
+  }
+
+  // Delete related follow-ups
+  await FollowUp.deleteMany({ relatedPolicyId: policyId, agencyId });
+
+  // Unlink from documents
+  const Document = require('../models/Document');
+  if (Document) {
+    await Document.updateMany({ policyId, agencyId }, { $unset: { policyId: 1 } });
+  }
+
+  // Permanently delete policy from database
+  await InsurancePolicy.deleteOne({ _id: policyId, agencyId });
 
   if (auditLogService && auditLogService.createLog) {
-    await auditLogService.createLog(agencyId, 'InsurancePolicy', policyId, 'DELETE', policy.toObject(), null, user.userId);
+    await auditLogService.createLog(agencyId, 'InsurancePolicy', policyId, 'DELETE', oldData, null, user.userId);
   }
 
   if (activityService && activityService.logActivity) {

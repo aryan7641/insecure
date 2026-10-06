@@ -73,14 +73,14 @@ const update = async (txnId, agencyId, data, user) => {
 };
 
 const softDelete = async (txnId, agencyId, user) => {
-  const transaction = await Transaction.findOne({ _id: txnId, agencyId, isDeleted: false });
+  const transaction = await Transaction.findOne({ _id: txnId, agencyId });
   if (!transaction) throw new NotFoundError('Transaction not found');
 
-  transaction.isDeleted = true;
-  await transaction.save();
+  const oldData = transaction.toObject();
+  await Transaction.deleteOne({ _id: txnId, agencyId });
 
   await mutualFundService.recalculateHoldings(transaction.mutualFundId);
-  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'Transaction', txnId, { isDeleted: false }, { isDeleted: true });
+  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'Transaction', txnId, oldData, null);
 };
 
 module.exports = {

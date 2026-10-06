@@ -189,13 +189,10 @@ const deleteCommission = async (agencyId, policyId, user) => {
     throw new ForbiddenError('You do not have permission to delete commission for this policy');
   }
 
-  const commission = await PolicyCommission.findOne({ agencyId, policyId, isDeleted: false });
+  const commission = await PolicyCommission.findOne({ agencyId, policyId });
   if (!commission) throw new NotFoundError('Commission record not found');
 
-  commission.isDeleted = true;
-  commission.deletedAt = new Date();
-  commission.deletedBy = user.userId;
-  await commission.save();
+  await PolicyCommission.deleteOne({ _id: commission._id, agencyId });
 
   policy.commission = undefined;
   await policy.save();

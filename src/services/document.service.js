@@ -124,13 +124,11 @@ const deleteDoc = async (docId, agencyId, user) => {
     console.warn('[document.service] S3 delete warning:', e.message);
   }
   
-  document.isDeleted = true;
-  document.deletedAt = new Date();
-  document.deletedBy = user.userId;
-  await document.save();
+  const oldData = document.toObject();
+  await Document.deleteOne({ _id: docId, agencyId });
 
   if (auditLogService && auditLogService.createLog) {
-    await auditLogService.createLog(agencyId, 'Document', document._id, 'DELETE', document.toObject(), null, user.userId);
+    await auditLogService.createLog(agencyId, 'Document', document._id, 'DELETE', oldData, null, user.userId);
   }
 
   if (activityService && activityService.logActivity) {

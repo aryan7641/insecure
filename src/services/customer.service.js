@@ -184,47 +184,31 @@ exports.update = async (customerId, agencyId, data, user) => {
 };
 
 exports.softDelete = async (customerId, agencyId, user, options = {}) => {
-  const customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
+  const customer = await Customer.findOne({ _id: customerId, agencyId });
   if (!customer) throw new NotFoundError('Customer not found');
 
-  // Check for active dependent records
-  const [policiesCount, documentsCount, mutualFundsCount, sipsCount] = await Promise.all([
-    InsurancePolicy ? InsurancePolicy.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
-    Document ? Document.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
-    MutualFund ? MutualFund.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
-    Sip ? Sip.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
+  const oldData = customer.toObject();
+
+  // Cascade delete dependent records for this customer in this agency
+  await Promise.all([
+    InsurancePolicy ? InsurancePolicy.deleteMany({ customerId, agencyId }) : Promise.resolve(),
+    Document ? Document.deleteMany({ customerId, agencyId }) : Promise.resolve(),
+    MutualFund ? MutualFund.deleteMany({ customerId, agencyId }) : Promise.resolve(),
+    Sip ? Sip.deleteMany({ customerId, agencyId }) : Promise.resolve(),
+    Transaction ? Transaction.deleteMany({ customerId, agencyId }) : Promise.resolve(),
+    FollowUp ? FollowUp.deleteMany({ customerId, agencyId }) : Promise.resolve()
   ]);
 
-  const totalDependencies = policiesCount + documentsCount + mutualFundsCount + sipsCount;
-  const isDeactivateMode = options.mode === 'deactivate';
-
-  if (totalDependencies > 0 && !isDeactivateMode) {
-    throw new DependencyConflictError(
-      'This customer has existing policies or related records and cannot be permanently deleted without removing associated data.',
-      {
-        policies: policiesCount,
-        documents: documentsCount,
-        mutualFunds: mutualFundsCount,
-        sips: sipsCount,
-        totalDependencies
-      }
-    );
-  }
-
-  // CRITICAL: Deleting or deactivating a customer MUST NOT cascade-delete existing policies,
-  // historical premium information, commission records, documents, or audit logs! Insurance history must remain intact.
-  customer.isDeleted = true;
-  customer.deletedAt = new Date();
-  customer.deletedBy = user.userId;
-  await customer.save();
+  // Permanently delete customer document from database
+  await Customer.deleteOne({ _id: customerId, agencyId });
 
   if (auditLogService && auditLogService.createLog) {
     await auditLogService.createLog(
       agencyId,
       'Customer',
       customerId,
-      isDeactivateMode ? 'DEACTIVATE' : 'DELETE',
-      customer.toObject(),
+      'DELETE',
+      oldData,
       null,
       user.userId
     );
@@ -234,16 +218,17 @@ exports.softDelete = async (customerId, agencyId, user, options = {}) => {
     await activityService.logActivity(agencyId, ACTIVITY_TYPES.CUSTOMER_DELETED, {
       customerId: customer._id,
       performedBy: user.userId,
-      deactivated: totalDependencies > 0 || isDeactivateMode
+      deleted: true
     });
   }
 
   return {
     deleted: true,
-    deactivated: totalDependencies > 0 || isDeactivateMode,
     customerId: customer._id
   };
 };
+
+exports.delete = exports.softDelete;
 
 exports.assignAgent = async (customerId, agencyId, agentId, user) => {
   const customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
@@ -303,10 +288,7 @@ exports.mergeCustomers = async (agencyId, sourceId, targetId, user) => {
   if (Document) await Document.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
   if (FollowUp) await FollowUp.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
 
-  source.isDeleted = true;
-  source.deletedAt = new Date();
-  source.deletedBy = user.userId;
-  await source.save();
+  await Customer.deleteOne({ _id: sourceId, agencyId });
 
   if (auditLogService && auditLogService.createLog) {
     await auditLogService.createLog(agencyId, 'Customer', targetId, 'MERGE', { sourceId }, target.toObject(), user.userId);

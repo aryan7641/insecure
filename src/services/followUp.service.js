@@ -103,16 +103,14 @@ exports.update = async (followUpId, agencyId, data, user) => {
 };
 
 exports.delete = async (followUpId, agencyId, user) => {
-  const followUp = await FollowUp.findOne({ _id: followUpId, agencyId, isDeleted: false });
+  const followUp = await FollowUp.findOne({ _id: followUpId, agencyId });
   if (!followUp) throw new NotFoundError('Follow-up not found');
 
-  followUp.isDeleted = true;
-  followUp.deletedAt = new Date();
-  followUp.deletedBy = user.userId;
-  await followUp.save();
+  const oldData = followUp.toObject();
+  await FollowUp.deleteOne({ _id: followUpId, agencyId });
 
   if (auditLogService && auditLogService.createLog) {
-    await auditLogService.createLog(agencyId, 'FollowUp', followUpId, 'DELETE', followUp.toObject(), null, user.userId);
+    await auditLogService.createLog(agencyId, 'FollowUp', followUpId, 'DELETE', oldData, null, user.userId);
   }
 
   return true;

@@ -80,16 +80,15 @@ const update = async (fundId, agencyId, data, user) => {
 };
 
 const softDelete = async (fundId, agencyId, user) => {
-  const fund = await MutualFund.findOne({ _id: fundId, agencyId, isDeleted: false });
+  const fund = await MutualFund.findOne({ _id: fundId, agencyId });
   if (!fund) throw new NotFoundError('Mutual fund not found');
 
-  fund.isDeleted = true;
-  await fund.save();
+  const oldData = fund.toObject();
+  await Sip.deleteMany({ mutualFundId: fundId, agencyId });
+  await Transaction.deleteMany({ mutualFundId: fundId, agencyId });
+  await MutualFund.deleteOne({ _id: fundId, agencyId });
 
-  await Sip.updateMany({ mutualFundId: fundId }, { isDeleted: true });
-  await Transaction.updateMany({ mutualFundId: fundId }, { isDeleted: true });
-
-  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'MutualFund', fundId, { isDeleted: false }, { isDeleted: true });
+  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'MutualFund', fundId, oldData, null);
 };
 
 const recalculateHoldings = async (fundId) => {

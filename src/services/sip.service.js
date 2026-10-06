@@ -73,13 +73,13 @@ const update = async (sipId, agencyId, data, user) => {
 };
 
 const softDelete = async (sipId, agencyId, user) => {
-  const sip = await Sip.findOne({ _id: sipId, agencyId, isDeleted: false });
+  const sip = await Sip.findOne({ _id: sipId, agencyId });
   if (!sip) throw new NotFoundError('SIP not found');
 
-  sip.isDeleted = true;
-  await sip.save();
+  const oldData = sip.toObject();
+  await Sip.deleteOne({ _id: sipId, agencyId });
 
-  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'Sip', sipId, { isDeleted: false }, { isDeleted: true });
+  await auditLogService.logAction(user.userId, agencyId, 'DELETE', 'Sip', sipId, oldData, null);
 };
 
 module.exports = {
