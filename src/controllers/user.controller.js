@@ -7,7 +7,7 @@ exports.listUsers = catchAsync(async (req, res) => {
 });
 
 exports.getUserById = catchAsync(async (req, res) => {
-  const user = await userService.getUserById(req.params.userId);
+  const user = await userService.getUserById(req.params.userId, req.user);
   return ApiResponse.success(res, { user }, 'User retrieved successfully');
 });
 

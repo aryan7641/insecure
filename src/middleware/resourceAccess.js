@@ -46,7 +46,11 @@ const checkResourceAccess = (resourceType) => {
         return next();
       }
 
-      const resource = await Model.findById(resourceId);
+      const query = { _id: resourceId };
+      if (req.agencyId) {
+        query.agencyId = req.agencyId;
+      }
+      const resource = await Model.findOne(query);
       if (!resource) {
         return next();
       }
@@ -59,7 +63,11 @@ const checkResourceAccess = (resourceType) => {
         if (!resource.customerId) {
           throw new AuthorizationError('Resource missing customer reference');
         }
-        const customer = await Customer.findById(resource.customerId);
+        const custQuery = { _id: resource.customerId };
+        if (req.agencyId) {
+          custQuery.agencyId = req.agencyId;
+        }
+        const customer = await Customer.findOne(custQuery);
         if (!customer || customer.assignedAgentId.toString() !== req.user.userId.toString()) {
           throw new AuthorizationError('You do not have access to this resource');
         }

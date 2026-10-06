@@ -1,4 +1,5 @@
 const Customer = require('../models/Customer');
+const User = require('../models/User');
 const InsurancePolicy = require('../models/InsurancePolicy');
 const FollowUp = require('../models/FollowUp');
 const MutualFund = require('../models/MutualFund');
@@ -153,6 +154,16 @@ exports.update = async (customerId, agencyId, data, user) => {
     if (existing) throw new ConflictError('Customer with this mobile number already exists');
   }
 
+  // Protect multi-tenant immutable fields
+  delete data.agencyId;
+  delete data.createdBy;
+  delete data._id;
+
+  if (data.assignedAgentId) {
+    const agent = await User.findOne({ _id: data.assignedAgentId, 'agencies.agencyId': agencyId });
+    if (!agent) throw new ValidationError('Assigned agent does not belong to this agency');
+  }
+
   const oldData = customer.toObject();
   Object.assign(customer, data);
   customer.updatedBy = user.userId;
@@ -238,14 +249,17 @@ exports.assignAgent = async (customerId, agencyId, agentId, user) => {
   const customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
   if (!customer) throw new NotFoundError('Customer not found');
 
+  const agent = await User.findOne({ _id: agentId, 'agencies.agencyId': agencyId });
+  if (!agent) throw new ValidationError('Agent not found or does not belong to this agency');
+
   const previousAgentId = customer.assignedAgentId;
   customer.assignedAgentId = agentId;
   customer.updatedBy = user.userId;
   await customer.save();
 
-  if (InsurancePolicy) await InsurancePolicy.updateMany({ customerId }, { $set: { assignedAgentId: agentId } });
-  if (MutualFund) await MutualFund.updateMany({ customerId }, { $set: { assignedAgentId: agentId } });
-  if (Sip) await Sip.updateMany({ customerId }, { $set: { assignedAgentId: agentId } });
+  if (InsurancePolicy) await InsurancePolicy.updateMany({ customerId, agencyId }, { $set: { assignedAgentId: agentId } });
+  if (MutualFund) await MutualFund.updateMany({ customerId, agencyId }, { $set: { assignedAgentId: agentId } });
+  if (Sip) await Sip.updateMany({ customerId, agencyId }, { $set: { assignedAgentId: agentId } });
 
   if (auditLogService && auditLogService.createLog) {
     await auditLogService.createLog(agencyId, 'Customer', customerId, 'UPDATE', { assignedAgentId: previousAgentId }, { assignedAgentId: agentId }, user.userId);
@@ -282,12 +296,12 @@ exports.mergeCustomers = async (agencyId, sourceId, targetId, user) => {
   target.updatedBy = user.userId;
   await target.save();
 
-  if (InsurancePolicy) await InsurancePolicy.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
-  if (MutualFund) await MutualFund.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
-  if (Sip) await Sip.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
-  if (Transaction) await Transaction.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
-  if (Document) await Document.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
-  if (FollowUp) await FollowUp.updateMany({ customerId: sourceId }, { $set: { customerId: targetId } });
+  if (InsurancePolicy) await InsurancePolicy.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
+  if (MutualFund) await MutualFund.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
+  if (Sip) await Sip.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
+  if (Transaction) await Transaction.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
+  if (Document) await Document.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
+  if (FollowUp) await FollowUp.updateMany({ customerId: sourceId, agencyId }, { $set: { customerId: targetId } });
 
   source.isDeleted = true;
   source.deletedAt = new Date();

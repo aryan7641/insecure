@@ -121,7 +121,14 @@ const upsertCommission = async (agencyId, policyId, data, user) => {
   const calculatedAmount = calculateCommissionAmount(basisAmount, commissionType, commissionPercentage, flatAmount);
 
   const customerId = policy.customerId?._id || policy.customerId;
-  const agentId = (isAdmin && data.agentId) ? data.agentId : (policy.assignedAgentId || user.userId);
+  let agentId = policy.assignedAgentId || user.userId;
+  if (isAdmin && data.agentId) {
+    const agentUser = await User.findOne({ _id: data.agentId, 'agencies.agencyId': agencyId });
+    if (!agentUser) {
+      throw new ValidationError('Assigned agent does not belong to this agency');
+    }
+    agentId = data.agentId;
+  }
   const commissionStatus = data.commissionStatus || 'pending';
   const remarks = data.remarks || '';
 

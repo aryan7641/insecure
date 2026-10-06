@@ -1,9 +1,12 @@
+const mongoose = require('mongoose');
 const Customer = require('../models/Customer');
 const InsurancePolicy = require('../models/InsurancePolicy');
 const MutualFund = require('../models/MutualFund');
 const FollowUp = require('../models/FollowUp');
 const Document = require('../models/Document');
 const Transaction = require('../models/Transaction');
+
+const toObjectId = (id) => (mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
 
 const getDashboard = async (agencyId) => {
   const [totalCustomers, activePolicies, totalInvestments, pendingFollowUps, pendingDocuments] = await Promise.all([
@@ -24,8 +27,9 @@ const getDashboard = async (agencyId) => {
 };
 
 const getInsuranceAnalytics = async (agencyId) => {
+  const agencyObjectId = toObjectId(agencyId);
   const policies = await InsurancePolicy.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     {
       $group: {
         _id: null,
@@ -41,7 +45,7 @@ const getInsuranceAnalytics = async (agencyId) => {
   ]);
 
   const typeData = await InsurancePolicy.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     { $group: { _id: '$type', count: { $sum: 1 } } }
   ]);
 
@@ -76,8 +80,9 @@ const getInsuranceAnalytics = async (agencyId) => {
 };
 
 const getMutualFundAnalytics = async (agencyId) => {
+  const agencyObjectId = toObjectId(agencyId);
   const mfData = await MutualFund.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     {
       $group: {
         _id: null,
@@ -91,13 +96,13 @@ const getMutualFundAnalytics = async (agencyId) => {
   ]);
 
   const byAmc = await MutualFund.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     { $group: { _id: '$amc', totalValue: { $sum: '$currentValue' } } },
     { $sort: { totalValue: -1 } }
   ]);
 
   const topSchemes = await MutualFund.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     { $group: { _id: '$schemeName', totalValue: { $sum: '$currentValue' } } },
     { $sort: { totalValue: -1 } },
     { $limit: 5 }
@@ -124,6 +129,7 @@ const getMutualFundAnalytics = async (agencyId) => {
 };
 
 const getCrmAnalytics = async (agencyId) => {
+  const agencyObjectId = toObjectId(agencyId);
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
@@ -132,7 +138,7 @@ const getCrmAnalytics = async (agencyId) => {
     Customer.countDocuments({ agencyId }),
     Customer.countDocuments({ agencyId, createdAt: { $gte: startOfMonth } }),
     FollowUp.aggregate([
-      { $match: { agencyId } },
+      { $match: { agencyId: agencyObjectId } },
       {
         $group: {
           _id: null,
@@ -155,7 +161,7 @@ const getCrmAnalytics = async (agencyId) => {
   ]);
 
   const agentPerformance = await FollowUp.aggregate([
-    { $match: { agencyId } },
+    { $match: { agencyId: agencyObjectId } },
     {
       $group: {
         _id: '$agentId',

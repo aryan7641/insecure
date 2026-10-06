@@ -6,11 +6,27 @@ exports.listUsers = async (agencyId) => {
   return User.find({ 'agencies.agencyId': agencyId }).select('-__v');
 };
 
-exports.getUserById = async (userId) => {
+exports.getUserById = async (userId, requestingUser) => {
   const user = await User.findById(userId).select('-__v');
   if (!user) {
     throw new NotFoundError('User not found');
   }
+
+  if (requestingUser) {
+    const isSelf = user._id.toString() === requestingUser.userId.toString();
+    const isSuperAdmin = requestingUser.role === ROLES.SUPER_ADMIN;
+
+    if (!isSelf && !isSuperAdmin) {
+      const requestingAgencies = (requestingUser.agencies || []).map(a => (a.agencyId?._id || a.agencyId).toString());
+      const targetAgencies = (user.agencies || []).map(a => (a.agencyId?._id || a.agencyId).toString());
+      const hasSharedAgency = requestingAgencies.some(id => targetAgencies.includes(id));
+
+      if (!(requestingUser.role === ROLES.ADMIN && hasSharedAgency)) {
+        throw new AuthorizationError('Not authorized to view this user');
+      }
+    }
+  }
+
   return user;
 };
 
@@ -20,16 +36,23 @@ exports.updateUser = async (userId, data, requestingUser) => {
     throw new NotFoundError('User not found');
   }
 
-  // Only users can update themselves, or admins can update others
-  if (user._id.toString() !== requestingUser.userId.toString() && requestingUser.role !== ROLES.ADMIN) {
+  const isSelf = user._id.toString() === requestingUser.userId.toString();
+  const isSuperAdmin = requestingUser.role === ROLES.SUPER_ADMIN;
+
+  const requestingAgencies = (requestingUser.agencies || []).map(a => (a.agencyId?._id || a.agencyId).toString());
+  const targetAgencies = (user.agencies || []).map(a => (a.agencyId?._id || a.agencyId).toString());
+  const hasSharedAgency = requestingAgencies.some(id => targetAgencies.includes(id));
+
+  // Only self, super_admin, or admin of a shared agency can update
+  if (!isSelf && !isSuperAdmin && !(requestingUser.role === ROLES.ADMIN && hasSharedAgency)) {
     throw new AuthorizationError('Not authorized to update this user');
   }
 
   const updateData = {};
   if (data.name) updateData.name = data.name;
   
-  // Only admins can update roles
-  if (data.role && requestingUser.role === ROLES.ADMIN) {
+  // Only admins can update roles (super_admin or admin in same agency)
+  if (data.role && (isSuperAdmin || (requestingUser.role === ROLES.ADMIN && hasSharedAgency))) {
     updateData.role = data.role;
   }
 

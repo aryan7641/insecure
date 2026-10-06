@@ -297,7 +297,7 @@ insurancePolicySchema.index({ agencyId: 1, customerId: 1 });
 insurancePolicySchema.index({ agencyId: 1, renewalDate: 1, status: 1 });
 insurancePolicySchema.index({ agencyId: 1, insuranceType: 1, insuranceSubtype: 1 });
 insurancePolicySchema.index({ agencyId: 1, assignedAgentId: 1 });
-insurancePolicySchema.index({ 'vehicleDetails.registrationNumber': 1 });
+insurancePolicySchema.index({ agencyId: 1, 'vehicleDetails.registrationNumber': 1 });
 
 addSoftDelete(insurancePolicySchema);
 

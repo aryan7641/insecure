@@ -1,6 +1,7 @@
 const InsurancePolicy = require('../models/InsurancePolicy');
 const Customer = require('../models/Customer');
 const FollowUp = require('../models/FollowUp');
+const User = require('../models/User');
 const { getSubtypeSchema } = require('../schemas/insuranceSubtypeSchemas');
 const { normalizePolicyPayload } = require('./insuranceSchema.service');
 const { NotFoundError, ConflictError, AuthorizationError, ValidationError } = require('../utils/apiError');
@@ -148,6 +149,27 @@ exports.update = async (policyId, agencyId, data, user) => {
 
   const oldData = policy.toObject();
   
+  // Protect multi-tenant immutable fields
+  delete data.agencyId;
+  delete data.createdBy;
+  delete data._id;
+
+  // Validate customerId belongs to agency if supplied
+  if (data.customerId && data.customerId.toString() !== policy.customerId.toString()) {
+    const customer = await Customer.findOne({ _id: data.customerId, agencyId, isDeleted: false });
+    if (!customer) {
+      throw new NotFoundError('Customer not found in this agency');
+    }
+  }
+
+  // Validate assignedAgentId belongs to agency if supplied
+  if (data.assignedAgentId) {
+    const agent = await User.findOne({ _id: data.assignedAgentId, 'agencies.agencyId': agencyId });
+    if (!agent) {
+      throw new ValidationError('Assigned agent does not belong to this agency');
+    }
+  }
+
   Object.assign(policy, data);
   if (data.premium || data.finalPremium) {
     policy.premium = Number(data.premium || data.finalPremium);

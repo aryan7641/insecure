@@ -1,5 +1,6 @@
 const Document = require('../models/Document');
 const Customer = require('../models/Customer');
+const InsurancePolicy = require('../models/InsurancePolicy');
 const { getStorageProvider } = require('../providers/storage/azureBlobProvider');
 const activityService = require('./activity.service');
 const auditLogService = require('./auditLog.service');
@@ -9,9 +10,18 @@ const { ACTIVITY_TYPES, DOCUMENT_CATEGORIES } = require('../utils/constants');
 const upload = async (agencyId, data, file, user) => {
   const { customerId, policyId, category } = data;
   
-  let customer = null;
   if (customerId) {
-    customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
+    const customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
+    if (!customer) {
+      throw new NotFoundError('Customer not found in this agency');
+    }
+  }
+
+  if (policyId) {
+    const policy = await InsurancePolicy.findOne({ _id: policyId, agencyId, isDeleted: false });
+    if (!policy) {
+      throw new NotFoundError('Policy not found in this agency');
+    }
   }
 
   const storageProvider = getStorageProvider();

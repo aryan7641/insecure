@@ -65,7 +65,7 @@ const policyCommissionSchema = new Schema(
   { timestamps: true }
 );
 
-policyCommissionSchema.index({ agencyId: 1, policyId: 1 });
+policyCommissionSchema.index({ agencyId: 1, policyId: 1 }, { unique: true, partialFilterExpression: { isDeleted: { $ne: true } } });
 policyCommissionSchema.index({ agencyId: 1, customerId: 1 });
 policyCommissionSchema.index({ agencyId: 1, agentId: 1, commissionStatus: 1 });
 
