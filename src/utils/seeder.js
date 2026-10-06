@@ -103,11 +103,12 @@ async function seedDatabaseIfEmpty() {
       console.log('[Seeder] Seeded insurance WhatsApp templates');
     }
 
-    // Seed sample policies if empty
-    const policyCount = await InsurancePolicy.countDocuments({ agencyId: agency._id });
-    if (policyCount === 0) {
-      const customer = await Customer.findOne({ agencyId: agency._id });
-      if (customer) {
+    // Seed sample policies if empty (only in development if explicitly requested)
+    if (process.env.NODE_ENV === 'development' && process.env.SEED_DEMO_DATA === 'true') {
+      const policyCount = await InsurancePolicy.countDocuments({ agencyId: agency._id });
+      if (policyCount === 0) {
+        const customer = await Customer.findOne({ agencyId: agency._id });
+        if (customer) {
         const in30Days = new Date();
         in30Days.setDate(in30Days.getDate() + 25);
 
@@ -204,7 +205,8 @@ async function seedDatabaseIfEmpty() {
         console.log('[Seeder] Seeded sample insurance policies');
       }
     }
-  } catch (err) {
+  }
+} catch (err) {
     console.error('[Seeder] Error seeding database:', err.message);
   }
 }

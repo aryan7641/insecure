@@ -13,19 +13,27 @@ exports.login = async ({ email, password, role }) => {
   const normalizedEmail = email.toLowerCase().trim();
   let user = await User.findOne({ email: normalizedEmail }).populate('agencies.agencyId', 'name status');
 
-  // If user doesn't exist, create or seed one with default agency
+  const apexAgency = await Agency.findOne({ name: 'Apex Wealth Partners' });
+  const isApexUser = normalizedEmail === 'admin@apexwealth.in' || normalizedEmail === 'aryansharma7641@gmail.com' || normalizedEmail === 'priya@apexwealth.in';
+
+  // If user doesn't exist, create one with dedicated agency
   if (!user) {
-    let agency = await Agency.findOne();
-    if (!agency) {
+    const defaultName = normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase();
+    const assignedRole = role || (normalizedEmail.includes('admin') ? ROLES.ADMIN : ROLES.AGENT);
+
+    let agency;
+    if (isApexUser && apexAgency) {
+      agency = apexAgency;
+    } else {
       agency = await Agency.create({
-        name: 'Apex Wealth Partners',
-        status: AGENCY_STATUS.ACTIVE
+        name: `${defaultName}'s Agency`,
+        status: AGENCY_STATUS.ACTIVE,
+        config: { theme: 'dark', currency: 'INR' }
       });
     }
 
-    const assignedRole = role || (normalizedEmail.includes('admin') ? ROLES.ADMIN : ROLES.AGENT);
     user = await User.create({
-      name: normalizedEmail.split('@')[0].replace('.', ' ').toUpperCase(),
+      name: defaultName,
       email: normalizedEmail,
       role: assignedRole,
       status: USER_STATUS.ACTIVE,
@@ -46,6 +54,22 @@ exports.login = async ({ email, password, role }) => {
     if (user.status !== USER_STATUS.ACTIVE) {
       user.status = USER_STATUS.ACTIVE;
     }
+
+    // Migrate non-apex user who was erroneously attached to Apex Wealth Partners due to legacy bug
+    if (!isApexUser && apexAgency && user.activeAgencyId && user.activeAgencyId.toString() === apexAgency._id.toString()) {
+      const newAgency = await Agency.create({
+        name: `${user.name}'s Agency`,
+        status: AGENCY_STATUS.ACTIVE,
+        config: { theme: 'dark', currency: 'INR' },
+        admins: [user._id]
+      });
+      await Agency.findByIdAndUpdate(apexAgency._id, {
+        $pull: { admins: user._id, agents: user._id }
+      });
+      user.agencies = [{ agencyId: newAgency._id, role: ROLES.ADMIN }];
+      user.activeAgencyId = newAgency._id;
+    }
+
     await user.save();
   }
 
@@ -67,52 +91,109 @@ exports.login = async ({ email, password, role }) => {
 };
 
 exports.handleGoogleAuth = async (profile) => {
-  const email = (profile.emails && profile.emails[0] ? profile.emails[0].value : (profile.email || '')).toLowerCase().trim();
-  if (!email) {
+  const googleId = profile.googleId || profile.id;
+  const rawEmail = (profile.emails && profile.emails[0] ? profile.emails[0].value : (profile.email || '')).toLowerCase().trim();
+  if (!rawEmail) {
     throw new AuthenticationError('Google profile does not contain an email');
   }
 
-  let user = await User.findOne({ email });
+  const profileName = profile.displayName || profile.name || (profile.givenName ? `${profile.givenName} ${profile.familyName || ''}`.trim() : null) || rawEmail.split('@')[0];
+
+  let user = null;
+  if (googleId) {
+    user = await User.findOne({ googleId });
+  }
+  if (!user) {
+    user = await User.findOne({ email: rawEmail });
+  }
+
+  const apexAgency = await Agency.findOne({ name: 'Apex Wealth Partners' });
+  const isApexUser = rawEmail === 'admin@apexwealth.in' || rawEmail === 'aryansharma7641@gmail.com' || rawEmail === 'priya@apexwealth.in';
 
   if (user) {
     user.lastLogin = new Date();
-    if (profile.id && !user.googleId) user.googleId = profile.id;
+    if (googleId && !user.googleId) user.googleId = googleId;
     if (user.status !== USER_STATUS.ACTIVE) user.status = USER_STATUS.ACTIVE;
 
-    // Ensure user has an active agency
-    if (!user.activeAgencyId || !user.agencies || user.agencies.length === 0) {
-      let agency = await Agency.findOne();
-      if (!agency) {
-        agency = await Agency.create({ name: 'Apex Wealth Partners', status: AGENCY_STATUS.ACTIVE });
-      }
-      user.agencies = [{ agencyId: agency._id, role: user.role || ROLES.ADMIN }];
-      user.activeAgencyId = agency._id;
+    // Update name from Google profile if user has placeholder or default
+    if (profileName && (!user.name || user.name.toLowerCase() === rawEmail.split('@')[0].toLowerCase())) {
+      user.name = profileName;
     }
+
+    // Tenant Isolation Check:
+    // If this is NOT an Apex Admin/Agent user, but is pointing to Apex Wealth Partners due to legacy bug, migrate them to their own dedicated agency!
+    if (!isApexUser && apexAgency && user.activeAgencyId && user.activeAgencyId.toString() === apexAgency._id.toString()) {
+      const newAgency = await Agency.create({
+        name: `${user.name || profileName}'s Agency`,
+        status: AGENCY_STATUS.ACTIVE,
+        config: { theme: 'dark', currency: 'INR' },
+        admins: [user._id]
+      });
+      // Remove user from Apex Wealth Partners admins/agents
+      await Agency.findByIdAndUpdate(apexAgency._id, {
+        $pull: { admins: user._id, agents: user._id }
+      });
+      user.agencies = [{ agencyId: newAgency._id, role: ROLES.ADMIN }];
+      user.activeAgencyId = newAgency._id;
+    } else if (!user.activeAgencyId || !user.agencies || user.agencies.length === 0) {
+      // User has no agency at all
+      if (isApexUser && apexAgency) {
+        user.agencies = [{ agencyId: apexAgency._id, role: user.role || ROLES.ADMIN }];
+        user.activeAgencyId = apexAgency._id;
+      } else {
+        const newAgency = await Agency.create({
+          name: `${user.name || profileName}'s Agency`,
+          status: AGENCY_STATUS.ACTIVE,
+          config: { theme: 'dark', currency: 'INR' },
+          admins: [user._id]
+        });
+        user.agencies = [{ agencyId: newAgency._id, role: ROLES.ADMIN }];
+        user.activeAgencyId = newAgency._id;
+      }
+    }
+
     await user.save();
     return user;
   }
 
-  let agency = await Agency.findOne();
-  if (!agency) {
-    agency = await Agency.create({
-      name: 'Apex Wealth Partners',
-      status: AGENCY_STATUS.ACTIVE
+  // Brand NEW User!
+  if (isApexUser && apexAgency) {
+    // Designated seed admin
+    const role = ROLES.ADMIN;
+    user = await User.create({
+      email: rawEmail,
+      name: profileName,
+      googleId,
+      role,
+      status: USER_STATUS.ACTIVE,
+      agencies: [{ agencyId: apexAgency._id, role }],
+      activeAgencyId: apexAgency._id,
+      lastLogin: new Date()
     });
+    await Agency.findByIdAndUpdate(apexAgency._id, { $addToSet: { admins: user._id } });
+    return user;
   }
+
+  // Create dedicated agency for the new user!
+  const newAgency = await Agency.create({
+    name: `${profileName}'s Agency`,
+    status: AGENCY_STATUS.ACTIVE,
+    config: { theme: 'dark', currency: 'INR' }
+  });
 
   const role = ROLES.ADMIN;
   user = await User.create({
-    email,
-    name: profile.displayName || profile.name || email.split('@')[0],
-    googleId: profile.id,
+    email: rawEmail,
+    name: profileName,
+    googleId,
     role,
     status: USER_STATUS.ACTIVE,
-    agencies: [{ agencyId: agency._id, role }],
-    activeAgencyId: agency._id,
+    agencies: [{ agencyId: newAgency._id, role }],
+    activeAgencyId: newAgency._id,
     lastLogin: new Date()
   });
 
-  await Agency.findByIdAndUpdate(agency._id, { $addToSet: { admins: user._id } });
+  await Agency.findByIdAndUpdate(newAgency._id, { $set: { admins: [user._id] } });
 
   return user;
 };
