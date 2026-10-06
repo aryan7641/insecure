@@ -120,7 +120,7 @@ exports.list = async (agencyId, filters = {}, user) => {
   const { skip, limit, page } = parsePaginationParams(filters);
   const total = await InsurancePolicy.countDocuments(query);
   const policies = await InsurancePolicy.find(query)
-    .populate('customerId', 'name mobile email pan city')
+    .populate({ path: 'customerId', select: 'name mobile email pan city', options: { includeSoftDeleted: true } })
     .populate('assignedAgentId', 'name email')
     .populate('documentId', 'fileName blobUrl fileType verificationState')
     .sort({ renewalDate: 1, createdAt: -1 })
@@ -132,7 +132,7 @@ exports.list = async (agencyId, filters = {}, user) => {
 
 exports.getById = async (policyId, agencyId) => {
   const policy = await InsurancePolicy.findOne({ _id: policyId, agencyId, isDeleted: false })
-    .populate('customerId', 'name mobile email pan dob gender address city state pincode')
+    .populate({ path: 'customerId', select: 'name mobile email pan dob gender address city state pincode', options: { includeSoftDeleted: true } })
     .populate('assignedAgentId', 'name email')
     .populate('documentId', 'fileName blobUrl fileType verificationState')
     .populate('renewedFromPolicyId', 'policyNumber insuranceCompany renewalDate')

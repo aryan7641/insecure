@@ -51,6 +51,14 @@ class ImportError extends AppError {
   }
 }
 
+class DependencyConflictError extends AppError {
+  constructor(message, dependencies = {}, code = 'CUSTOMER_HAS_DEPENDENCIES') {
+    super(message, 409);
+    this.code = code;
+    this.dependencies = dependencies;
+  }
+}
+
 module.exports = {
   AppError,
   ValidationError,
@@ -58,6 +66,7 @@ module.exports = {
   AuthorizationError,
   NotFoundError,
   ConflictError,
+  DependencyConflictError,
   FileProcessingError,
   ImportError
 };

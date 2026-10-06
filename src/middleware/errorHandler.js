@@ -13,7 +13,13 @@ const errorHandler = (err, req, res, next) => {
 
   if (err instanceof AppError) {
     statusCode = err.statusCode;
-    response = { success: false, message: err.message, errors: err.errors };
+    response = {
+      success: false,
+      message: err.message,
+      code: err.code || undefined,
+      dependencies: err.dependencies || undefined,
+      errors: err.errors || undefined
+    };
   } else if (err.name === 'ValidationError') {
     statusCode = 400;
     const errorList = Object.values(err.errors || {});

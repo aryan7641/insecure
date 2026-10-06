@@ -1,10 +1,11 @@
 const PolicyCommission = require('../models/PolicyCommission');
 const InsurancePolicy = require('../models/InsurancePolicy');
+const Customer = require('../models/Customer');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../utils/apiError');
 const { ROLES } = require('../utils/constants');
 
 /**
- * Live live calculation for commission amount rounded to 2 decimals
+ * Calculate commission amount rounded to 2 decimals
  */
 const calculateCommissionAmount = (basisAmount, type, percentage, flatAmount) => {
   if (type === 'flat') {
@@ -23,26 +24,45 @@ const calculateCommissionAmount = (basisAmount, type, percentage, flatAmount) =>
 };
 
 /**
- * Extract basis premium amount from policy object
+ * Extract basis premium amount strictly from policy object without cross-basis fallbacks
  */
 const getPolicyPremiumBasisAmount = (policy, basis = 'net_premium') => {
   if (!policy) return 0;
   const pb = policy.premiumBreakdown || {};
   const vd = policy.vehicleDetails || {};
 
-  switch (basis) {
+  const normalizedBasis = String(basis || '').toLowerCase().trim();
+
+  let amount = 0;
+  switch (normalizedBasis) {
     case 'final_premium':
-      return pb.finalPremium ?? policy.finalPremium ?? policy.premium ?? 0;
+    case 'gross_premium':
+    case 'final':
+    case 'gross':
+      amount = pb.finalPremium ?? policy.finalPremium ?? policy.premium ?? 0;
+      break;
     case 'basic_premium':
-      return pb.basicPremium ?? policy.basicPremium ?? 0;
+    case 'basic':
+      amount = pb.basicPremium ?? policy.basicPremium ?? 0;
+      break;
     case 'od_premium':
-      return vd.ownDamagePremium ?? pb.ownDamagePremium ?? policy.odPremium ?? 0;
+    case 'own_damage':
+    case 'own_damage_premium':
+    case 'od':
+      amount = vd.ownDamagePremium ?? pb.ownDamagePremium ?? policy.odPremium ?? 0;
+      break;
     case 'other_premium':
-      return pb.otherPremium ?? policy.otherPremium ?? 0;
+    case 'other':
+      amount = pb.otherPremium ?? policy.otherPremium ?? 0;
+      break;
     case 'net_premium':
+    case 'net':
+      amount = pb.netPremium ?? policy.netPremium ?? 0;
+      break;
     default:
-      return pb.netPremium ?? policy.netPremium ?? pb.finalPremium ?? policy.finalPremium ?? 0;
+      amount = 0;
   }
+  return Number(amount) || 0;
 };
 
 /**
@@ -50,7 +70,7 @@ const getPolicyPremiumBasisAmount = (policy, basis = 'net_premium') => {
  */
 const getByPolicyId = async (agencyId, policyId, user) => {
   const policy = await InsurancePolicy.findOne({ _id: policyId, agencyId, isDeleted: false })
-    .populate('customerId', 'name mobile email')
+    .populate({ path: 'customerId', select: 'name mobile email pan city', options: { includeSoftDeleted: true } })
     .populate('assignedAgentId', 'name email');
   if (!policy) throw new NotFoundError('Policy not found');
 
@@ -60,6 +80,7 @@ const getByPolicyId = async (agencyId, policyId, user) => {
   }
 
   let commission = await PolicyCommission.findOne({ agencyId, policyId, isDeleted: false })
+    .populate({ path: 'customerId', select: 'name mobile email', options: { includeSoftDeleted: true } })
     .populate('agentId', 'name email')
     .populate('createdBy', 'name email')
     .populate('updatedBy', 'name email');
@@ -88,8 +109,17 @@ const upsertCommission = async (agencyId, policyId, data, user) => {
   const flatAmount = Number(data.commissionAmount ?? data.flatAmount ?? data.amount ?? 0);
 
   const basisAmount = getPolicyPremiumBasisAmount(policy, commissionBasis);
+
+  // If percentage-based, the selected premium basis MUST exist and be greater than 0
+  if (commissionType === 'percentage') {
+    if (!basisAmount || basisAmount <= 0) {
+      throw new ValidationError('Selected premium basis is not available for this policy.');
+    }
+  }
+
   const calculatedAmount = calculateCommissionAmount(basisAmount, commissionType, commissionPercentage, flatAmount);
 
+  const customerId = policy.customerId?._id || policy.customerId;
   const agentId = (isAdmin && data.agentId) ? data.agentId : (policy.assignedAgentId || user.userId);
   const commissionStatus = data.commissionStatus || 'pending';
   const remarks = data.remarks || '';
@@ -97,6 +127,7 @@ const upsertCommission = async (agencyId, policyId, data, user) => {
   let commission = await PolicyCommission.findOne({ agencyId, policyId, isDeleted: false });
 
   if (commission) {
+    commission.customerId = customerId;
     commission.agentId = agentId;
     commission.commissionType = commissionType;
     commission.commissionBasis = commissionBasis;
@@ -110,6 +141,7 @@ const upsertCommission = async (agencyId, policyId, data, user) => {
     commission = await PolicyCommission.create({
       agencyId,
       policyId,
+      customerId,
       agentId,
       commissionType,
       commissionBasis,
@@ -124,11 +156,13 @@ const upsertCommission = async (agencyId, policyId, data, user) => {
 
   // Synchronize embedded commission details on policy for backwards compatibility
   policy.commission = {
+    commissionId: commission._id,
     type: commissionType,
+    basis: commissionBasis,
     percentage: commissionPercentage,
     amount: calculatedAmount,
     totalCommission: calculatedAmount,
-    status: commissionStatus === 'paid' ? 'received' : 'pending'
+    status: commissionStatus
   };
   await policy.save();
 
@@ -162,7 +196,7 @@ const deleteCommission = async (agencyId, policyId, user) => {
 };
 
 /**
- * List commissions with filtering
+ * List individual commissions with filtering
  */
 const listCommissions = async (agencyId, query = {}, user) => {
   const isAdmin = [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(user?.role);
@@ -174,17 +208,76 @@ const listCommissions = async (agencyId, query = {}, user) => {
     filter.agentId = query.agentId;
   }
 
-  if (query.status) {
-    filter.commissionStatus = query.status;
+  if (query.customerId) {
+    filter.customerId = query.customerId;
+  }
+
+  if (query.policyId) {
+    filter.policyId = query.policyId;
+  }
+
+  if (query.status && query.status !== 'all') {
+    filter.commissionStatus = query.status.toLowerCase();
   }
 
   const page = parseInt(query.page, 10) || 1;
   const limit = parseInt(query.limit, 10) || 50;
   const skip = (page - 1) * limit;
 
+  // Search filter across policyNumber, insurer, or customer name
+  if (query.search || query.policyNumber || query.lob) {
+    const policyQuery = { agencyId, isDeleted: false };
+    if (query.policyNumber) {
+      policyQuery.policyNumber = { $regex: query.policyNumber.trim(), $options: 'i' };
+    }
+    if (query.lob && query.lob !== 'all') {
+      policyQuery.$or = [
+        { insuranceType: query.lob.toLowerCase() },
+        { lob: query.lob.toLowerCase() }
+      ];
+    }
+
+    let customerIds = [];
+    if (query.search) {
+      const searchRegex = { $regex: query.search.trim(), $options: 'i' };
+      const matchingCusts = await Customer.find({
+        agencyId,
+        $or: [{ name: searchRegex }, { mobile: searchRegex }]
+      }, '_id', { includeSoftDeleted: true });
+      customerIds = matchingCusts.map(c => c._id);
+
+      policyQuery.$or = [
+        { policyNumber: searchRegex },
+        { insuranceCompany: searchRegex },
+        { productName: searchRegex }
+      ];
+    }
+
+    const matchingPolicies = await InsurancePolicy.find(policyQuery).select('_id customerId');
+    const matchingPolicyIds = matchingPolicies.map(p => p._id);
+
+    if (query.search) {
+      filter.$or = [
+        { policyId: { $in: matchingPolicyIds } },
+        { customerId: { $in: customerIds } }
+      ];
+    } else if (query.policyNumber || (query.lob && query.lob !== 'all')) {
+      filter.policyId = { $in: matchingPolicyIds };
+    }
+  }
+
   const [commissions, total] = await Promise.all([
     PolicyCommission.find(filter)
-      .populate('policyId', 'policyNumber insuranceCompany insuranceType insuranceSubtype finalPremium startDate endDate')
+      .populate({
+        path: 'policyId',
+        select: 'policyNumber insuranceCompany insuranceType insuranceSubtype lob finalPremium netPremium basicPremium odPremium premium premiumBreakdown vehicleDetails startDate endDate customerId',
+        populate: { path: 'customerId', select: 'name mobile email', options: { includeSoftDeleted: true } }
+      })
+      .populate({
+        path: 'customerId',
+        select: 'name mobile email',
+        options: { includeSoftDeleted: true }
+      })
       .populate('agentId', 'name email')
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -192,8 +285,17 @@ const listCommissions = async (agencyId, query = {}, user) => {
     PolicyCommission.countDocuments(filter)
   ]);
 
+  // Enrich any records where customerId wasn't directly populated but exists on policy
+  const enrichedCommissions = commissions.map(doc => {
+    const obj = doc.toObject();
+    if (!obj.customerId && obj.policyId?.customerId) {
+      obj.customerId = obj.policyId.customerId;
+    }
+    return obj;
+  });
+
   return {
-    commissions,
+    commissions: enrichedCommissions,
     pagination: {
       total,
       page,

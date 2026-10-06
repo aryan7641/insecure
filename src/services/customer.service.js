@@ -5,7 +5,7 @@ const MutualFund = require('../models/MutualFund');
 const Sip = require('../models/Sip');
 const Transaction = require('../models/Transaction');
 const Document = require('../models/Document');
-const { NotFoundError, ConflictError, AuthorizationError, ValidationError } = require('../utils/apiError');
+const { NotFoundError, ConflictError, AuthorizationError, ValidationError, DependencyConflictError } = require('../utils/apiError');
 const { ROLES, POLICY_STATUSES, FOLLOW_UP_STATUSES, FOLLOW_UP_TYPES, ACTIVITY_TYPES } = require('../utils/constants');
 const activityService = require('./activity.service');
 const auditLogService = require('./auditLog.service');
@@ -172,33 +172,66 @@ exports.update = async (customerId, agencyId, data, user) => {
   return customer;
 };
 
-exports.softDelete = async (customerId, agencyId, user) => {
+exports.softDelete = async (customerId, agencyId, user, options = {}) => {
   const customer = await Customer.findOne({ _id: customerId, agencyId, isDeleted: false });
   if (!customer) throw new NotFoundError('Customer not found');
 
+  // Check for active dependent records
+  const [policiesCount, documentsCount, mutualFundsCount, sipsCount] = await Promise.all([
+    InsurancePolicy ? InsurancePolicy.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
+    Document ? Document.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
+    MutualFund ? MutualFund.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
+    Sip ? Sip.countDocuments({ customerId, agencyId, isDeleted: false }) : 0,
+  ]);
+
+  const totalDependencies = policiesCount + documentsCount + mutualFundsCount + sipsCount;
+  const isDeactivateMode = options.mode === 'deactivate';
+
+  if (totalDependencies > 0 && !isDeactivateMode) {
+    throw new DependencyConflictError(
+      'This customer has existing policies or related records and cannot be permanently deleted without removing associated data.',
+      {
+        policies: policiesCount,
+        documents: documentsCount,
+        mutualFunds: mutualFundsCount,
+        sips: sipsCount,
+        totalDependencies
+      }
+    );
+  }
+
+  // CRITICAL: Deleting or deactivating a customer MUST NOT cascade-delete existing policies,
+  // historical premium information, commission records, documents, or audit logs! Insurance history must remain intact.
   customer.isDeleted = true;
   customer.deletedAt = new Date();
   customer.deletedBy = user.userId;
   await customer.save();
 
-  if (InsurancePolicy) await InsurancePolicy.updateMany({ customerId }, { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.userId } });
-  if (MutualFund) await MutualFund.updateMany({ customerId }, { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.userId } });
-  if (Sip) await Sip.updateMany({ customerId }, { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.userId } });
-  if (FollowUp) await FollowUp.updateMany({ customerId }, { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.userId } });
-  if (Document) await Document.updateMany({ customerId }, { $set: { isDeleted: true, deletedAt: new Date(), deletedBy: user.userId } });
-
   if (auditLogService && auditLogService.createLog) {
-    await auditLogService.createLog(agencyId, 'Customer', customerId, 'DELETE', customer.toObject(), null, user.userId);
+    await auditLogService.createLog(
+      agencyId,
+      'Customer',
+      customerId,
+      isDeactivateMode ? 'DEACTIVATE' : 'DELETE',
+      customer.toObject(),
+      null,
+      user.userId
+    );
   }
 
   if (activityService && activityService.logActivity) {
     await activityService.logActivity(agencyId, ACTIVITY_TYPES.CUSTOMER_DELETED, {
       customerId: customer._id,
       performedBy: user.userId,
+      deactivated: totalDependencies > 0 || isDeactivateMode
     });
   }
 
-  return true;
+  return {
+    deleted: true,
+    deactivated: totalDependencies > 0 || isDeactivateMode,
+    customerId: customer._id
+  };
 };
 
 exports.assignAgent = async (customerId, agencyId, agentId, user) => {

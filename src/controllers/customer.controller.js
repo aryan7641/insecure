@@ -23,8 +23,10 @@ exports.update = catchAsync(async (req, res) => {
 });
 
 exports.delete = catchAsync(async (req, res) => {
-  await customerService.softDelete(req.params.customerId, req.agencyId, req.user);
-  return new ApiResponse(200, 'Customer deleted successfully').send(res);
+  const mode = req.query.mode || req.body?.mode;
+  const result = await customerService.softDelete(req.params.customerId, req.agencyId, req.user, { mode });
+  const message = result.deactivated ? 'Customer deactivated successfully' : 'Customer deleted successfully';
+  return new ApiResponse(200, message, result).send(res);
 });
 
 exports.assign = catchAsync(async (req, res) => {

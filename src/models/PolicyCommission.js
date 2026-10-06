@@ -18,6 +18,7 @@ const policyCommissionSchema = new Schema(
   {
     agencyId: { type: Schema.Types.ObjectId, ref: 'Agency', required: true, index: true },
     policyId: { type: Schema.Types.ObjectId, ref: 'InsurancePolicy', required: true, index: true },
+    customerId: { type: Schema.Types.ObjectId, ref: 'Customer', index: true },
     agentId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     commissionType: {
       type: String,
@@ -65,6 +66,7 @@ const policyCommissionSchema = new Schema(
 );
 
 policyCommissionSchema.index({ agencyId: 1, policyId: 1 });
+policyCommissionSchema.index({ agencyId: 1, customerId: 1 });
 policyCommissionSchema.index({ agencyId: 1, agentId: 1, commissionStatus: 1 });
 
 addSoftDelete(policyCommissionSchema);
