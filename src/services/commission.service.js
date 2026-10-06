@@ -1,6 +1,7 @@
 const PolicyCommission = require('../models/PolicyCommission');
 const InsurancePolicy = require('../models/InsurancePolicy');
 const Customer = require('../models/Customer');
+const User = require('../models/User');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../utils/apiError');
 const { ROLES } = require('../utils/constants');
 
