@@ -36,6 +36,8 @@ exports.create = async (agencyId, data, user) => {
     lob: type.toUpperCase(),
     subLob: schema ? schema.name : 'General',
     premium: Number(data.premium || data.finalPremium || 0),
+    netPremium: Number(data.netPremium || data.premium || data.finalPremium || 0),
+    finalPremium: Number(data.finalPremium || data.premium || 0),
     insuredMembers: Array.isArray(data.insuredMembers) ? data.insuredMembers : [],
     vehicleDetails: data.vehicleDetails || undefined,
     healthDetails: data.healthDetails || undefined,
@@ -227,6 +229,8 @@ exports.delete = async (policyId, agencyId, user) => {
 
   return { message: 'Policy deleted successfully' };
 };
+
+exports.softDelete = exports.delete;
 
 async function scheduleRenewalFollowups(agencyId, customer, policy, user) {
   if (!policy.renewalDate) return;
