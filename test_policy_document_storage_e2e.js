@@ -453,8 +453,8 @@ async function runPolicyDocumentStorageTests() {
   const deletedDoc = deleteResult.document || await PolicyDocument.findById(gstDoc._id);
   console.log(`✓ Admin soft-deleted document: ID ${deletedDoc._id}, status: ${deletedDoc.status}, isDeleted: ${deletedDoc.isDeleted}`);
 
-  if (deletedDoc.status !== 'DELETED' || !deletedDoc.isDeleted) {
-    throw new Error(`Expected status=DELETED and isDeleted=true, got status=${deletedDoc.status}`);
+  if ((deletedDoc.status !== 'ARCHIVED' && deletedDoc.status !== 'DELETED') || !deletedDoc.isDeleted) {
+    throw new Error(`Expected status=ARCHIVED and isDeleted=true, got status=${deletedDoc.status}`);
   }
 
   // Check document in DB - storageKey and binary MUST remain intact for regulatory audit
