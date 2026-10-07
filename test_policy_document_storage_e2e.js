@@ -96,7 +96,8 @@ async function runPolicyDocumentStorageTests() {
     mobile: '9991112233',
     email: 'kamal.sharma@example.com',
     gender: 'male',
-    assignedAgentId: agent1._id
+    assignedAgentId: agent1._id,
+    createdBy: admin1._id
   });
   console.log(`Created Customer: ${customer1.name} (ID: ${customer1._id})`);
 
@@ -113,10 +114,13 @@ async function runPolicyDocumentStorageTests() {
     subType: 'HEALTH_INDIVIDUAL',
     premiumAmount: 18500,
     netPremium: 15678,
+    premium: 18500,
     startDate: new Date('2025-01-01'),
     endDate: new Date('2026-01-01'),
     status: 'ACTIVE',
-    agentId: agent1._id
+    assignedAgentId: agent1._id,
+    agentId: agent1._id,
+    createdBy: admin1._id
   });
   console.log(`Created Policy A without documents: ID ${policyA._id}, Number ${policyA.policyNumber}`);
 
@@ -336,11 +340,14 @@ async function runPolicyDocumentStorageTests() {
     subType: 'HEALTH_INDIVIDUAL',
     premiumAmount: 20000,
     netPremium: 16949,
+    premium: 20000,
     startDate: new Date('2026-01-01'),
     endDate: new Date('2027-01-01'),
     status: 'ACTIVE',
     renewedFromPolicyId: policyA._id,
-    agentId: agent1._id
+    assignedAgentId: agent1._id,
+    agentId: agent1._id,
+    createdBy: admin1._id
   });
   console.log(`Created Renewal Policy B: ID ${policyB._id}, renewedFrom: ${policyB.renewedFromPolicyId}`);
 
