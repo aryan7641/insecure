@@ -321,10 +321,11 @@ async function runPolicyDocumentStorageTests() {
     documentId: aadhaarDoc._id.toString(),
     user: agent1
   });
-  if (!downloadAadhaar.downloadUrl || !downloadAadhaar.downloadUrl.includes('X-Amz-Signature') && !downloadAadhaar.downloadUrl.includes('http')) {
-    throw new Error(`Failed to generate download URL for expired policy doc: ${downloadAadhaar.downloadUrl}`);
+  const validUrl = downloadAadhaar.presignedUrl || downloadAadhaar.downloadUrl;
+  if (!validUrl || (!validUrl.includes('X-Amz-Signature') && !validUrl.includes('http'))) {
+    throw new Error(`Failed to generate download URL for expired policy doc: ${validUrl}`);
   }
-  console.log(`✓ Presigned download URL generated for expired policy: ${downloadAadhaar.downloadUrl.substring(0, 60)}...`);
+  console.log(`✓ Presigned download URL generated for expired policy: ${validUrl.substring(0, 60)}...`);
   console.log('✓ PASS: Documents survived policy expiry and remain 100% accessible.');
 
   // =========================================================================

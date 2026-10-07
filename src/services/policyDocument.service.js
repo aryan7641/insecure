@@ -334,7 +334,7 @@ exports.getPolicyDocumentDownload = async ({ agencyId, policyId, documentId, use
     console.warn('[PolicyDocumentService] Audit log warning:', auditErr.message);
   }
 
-  return { presignedUrl, document };
+  return { presignedUrl, downloadUrl: presignedUrl, document };
 };
 
 /**
