@@ -117,7 +117,7 @@ async function runPolicyDocumentStorageTests() {
     premium: 18500,
     startDate: new Date('2025-01-01'),
     endDate: new Date('2026-01-01'),
-    status: 'ACTIVE',
+    status: 'active',
     assignedAgentId: agent1._id,
     agentId: agent1._id,
     createdBy: admin1._id
@@ -299,7 +299,7 @@ async function runPolicyDocumentStorageTests() {
   // =========================================================================
   console.log('\n--- TEST 5: Documents Survive Policy Expiry ---');
   // Set Policy A to expired
-  policyA.status = 'EXPIRED';
+  policyA.status = 'expired';
   policyA.endDate = new Date('2024-01-01');
   await policyA.save();
   console.log(`Policy A marked as EXPIRED (endDate: ${policyA.endDate.toISOString().split('T')[0]})`);
@@ -343,7 +343,7 @@ async function runPolicyDocumentStorageTests() {
     premium: 20000,
     startDate: new Date('2026-01-01'),
     endDate: new Date('2027-01-01'),
-    status: 'ACTIVE',
+    status: 'active',
     renewedFromPolicyId: policyA._id,
     assignedAgentId: agent1._id,
     agentId: agent1._id,
