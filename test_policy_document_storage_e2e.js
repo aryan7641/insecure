@@ -457,9 +457,10 @@ async function runPolicyDocumentStorageTests() {
     throw new Error(`Expected status=ARCHIVED and isDeleted=true, got status=${deletedDoc.status}`);
   }
 
-  // Check document in DB - storageKey and binary MUST remain intact for regulatory audit
-  const rawDeletedDoc = await PolicyDocument.findById(gstDoc._id);
-  if (!rawDeletedDoc.storageKey || rawDeletedDoc.storageKey.length === 0) {
+  // Check document in DB - soft-delete hook automatically hides it from normal queries,
+  // but with includeSoftDeleted: true, storageKey and binary MUST remain intact for regulatory audit
+  const rawDeletedDoc = await PolicyDocument.findById(gstDoc._id).setOptions({ includeSoftDeleted: true });
+  if (!rawDeletedDoc || !rawDeletedDoc.storageKey || rawDeletedDoc.storageKey.length === 0) {
     throw new Error('Compliance failure: storageKey was deleted from soft-deleted document!');
   }
   console.log(`✓ S3 binary reference preserved for regulatory compliance: ${rawDeletedDoc.storageKey}`);
