@@ -234,25 +234,35 @@ exports.uploadPolicyDocument = async ({ agencyId, policyId, documentType, file, 
 
 /**
  * 2. List Policy Documents (returns metadata only)
+ * Supports both:
+ * - getPolicyDocuments({ agencyId, policyId, user, includeHistory }) for API/controller
+ * - getPolicyDocuments(policyId) for future background extraction pipelines
  */
-exports.getPolicyDocuments = async ({ agencyId, policyId, user, includeHistory = false }) => {
-  const policy = await verifyPolicyAccess(agencyId, policyId, user);
+exports.getPolicyDocuments = async (paramsOrPolicyId, maybePolicyId, maybeUser, maybeIncludeHistory) => {
+  if (typeof paramsOrPolicyId === 'object' && paramsOrPolicyId !== null && (paramsOrPolicyId.agencyId || paramsOrPolicyId.policyId)) {
+    const { agencyId, policyId, user, includeHistory = false } = paramsOrPolicyId;
+    const policy = await verifyPolicyAccess(agencyId, policyId, user);
 
-  const query = {
-    agencyId,
-    policyId: policy._id,
-    isDeleted: false
-  };
+    const query = {
+      agencyId,
+      policyId: policy._id,
+      isDeleted: false
+    };
 
-  if (!includeHistory) {
-    query.isCurrent = true;
+    if (!includeHistory) {
+      query.isCurrent = true;
+    }
+
+    return PolicyDocument.find(query)
+      .populate('uploadedBy', 'name email role')
+      .sort({ documentType: 1, version: -1 });
   }
 
-  const documents = await PolicyDocument.find(query)
-    .populate('uploadedBy', 'name email role')
-    .sort({ documentType: 1, version: -1 });
-
-  return documents;
+  // Future extraction helper: direct query by policyId
+  const policyId = typeof paramsOrPolicyId === 'string' || mongoose.Types.ObjectId.isValid(paramsOrPolicyId)
+    ? paramsOrPolicyId
+    : maybePolicyId;
+  return PolicyDocument.find({ policyId, isDeleted: false, isCurrent: true });
 };
 
 /**
@@ -448,10 +458,6 @@ exports.deletePolicyDocument = async ({ agencyId, policyId, documentId, user }) 
  */
 exports.getPolicyDocument = async (documentId) => {
   return PolicyDocument.findById(documentId);
-};
-
-exports.getPolicyDocuments = async (policyId) => {
-  return PolicyDocument.find({ policyId, isDeleted: false });
 };
 
 exports.getPolicyDocumentBinary = async (documentId) => {
