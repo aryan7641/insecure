@@ -444,12 +444,13 @@ async function runPolicyDocumentStorageTests() {
   }
 
   // Admin soft delete
-  const deletedDoc = await policyDocumentService.deletePolicyDocument({
+  const deleteResult = await policyDocumentService.deletePolicyDocument({
     agencyId: agencyId1,
     policyId: policyA._id.toString(),
     documentId: gstDoc._id.toString(),
     user: admin1 // Admin role
   });
+  const deletedDoc = deleteResult.document || await PolicyDocument.findById(gstDoc._id);
   console.log(`✓ Admin soft-deleted document: ID ${deletedDoc._id}, status: ${deletedDoc.status}, isDeleted: ${deletedDoc.isDeleted}`);
 
   if (deletedDoc.status !== 'DELETED' || !deletedDoc.isDeleted) {

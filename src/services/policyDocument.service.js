@@ -450,7 +450,7 @@ exports.deletePolicyDocument = async ({ agencyId, policyId, documentId, user }) 
     console.warn('[PolicyDocumentService] Audit log warning:', auditErr.message);
   }
 
-  return { message: 'Document archived successfully', documentId: document._id };
+  return { message: 'Document archived successfully', documentId: document._id, document };
 };
 
 /**
