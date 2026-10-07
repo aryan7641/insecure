@@ -56,9 +56,29 @@ const uploadImport = multer({
   fileFilter: importFilter
 });
 
+const uploadPolicyDocumentSingle = (req, res, next) => {
+  const upload = multer({
+    storage,
+    limits: { fileSize: (parseInt(process.env.MAX_POLICY_DOCUMENT_SIZE_MB, 10) || 15) * 1024 * 1024 },
+    fileFilter: documentFilter
+  }).fields([
+    { name: 'file', maxCount: 1 },
+    { name: 'document', maxCount: 1 }
+  ]);
+
+  upload(req, res, (err) => {
+    if (err) return next(err);
+    if (req.files) {
+      req.file = (req.files.file && req.files.file[0]) || (req.files.document && req.files.document[0]) || null;
+    }
+    next();
+  });
+};
+
 module.exports = {
   uploadDocument,     // raw multer instance — use as uploadDocument.single('file')
   uploadImport,       // raw multer instance — use as uploadImport.single('file')
   uploadDocumentSingle, // pre-configured single middleware
   uploadImportSingle,   // pre-configured single middleware
+  uploadPolicyDocumentSingle
 };

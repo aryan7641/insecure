@@ -25,4 +25,7 @@ router.post('/:policyId/commission', commissionController.upsertCommission);
 router.put('/:policyId/commission', commissionController.upsertCommission);
 router.delete('/:policyId/commission', authorize([ROLES.ADMIN, ROLES.SUPER_ADMIN]), commissionController.deleteCommission);
 
+// Policy Document Storage (Aadhaar, PAN, RC, GST Certificate)
+router.use('/:policyId/documents', require('./policyDocument.routes'));
+
 module.exports = router;

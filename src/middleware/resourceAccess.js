@@ -6,6 +6,7 @@ const MutualFund = require('../models/MutualFund');
 const Sip = require('../models/Sip');
 const Transaction = require('../models/Transaction');
 const Document = require('../models/Document');
+const PolicyDocument = require('../models/PolicyDocument');
 const FollowUp = require('../models/FollowUp');
 
 const getModelForResource = (resourceType) => {
@@ -16,6 +17,7 @@ const getModelForResource = (resourceType) => {
     sip: Sip,
     transaction: Transaction,
     document: Document,
+    policyDocument: PolicyDocument,
     followUp: FollowUp
   };
   return models[resourceType];

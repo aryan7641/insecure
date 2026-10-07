@@ -22,5 +22,6 @@ router.use('/agencies/:agencyId/activity', require('./activity.routes'));
 router.use('/agencies/:agencyId/commissions', require('./commission.routes'));
 router.use('/agencies/:agencyId/audit-logs', require('./auditLog.routes'));
 router.use('/agencies/:agencyId/document-requirements', require('./documentRequirement.routes'));
+router.use('/policies/:policyId/documents', require('./policyDocument.routes'));
 
 module.exports = router;
