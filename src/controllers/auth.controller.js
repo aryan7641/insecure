@@ -17,21 +17,28 @@ exports.login = catchAsync(async (req, res) => {
 });
 
 exports.googleCallback = catchAsync(async (req, res) => {
-  const user = await authService.handleGoogleAuth(req.user);
-  
-  const accessToken = authService.generateAccessToken(user);
-  const refreshToken = authService.generateRefreshToken(user);
+  try {
+    const user = await authService.handleGoogleAuth(req.user);
+    
+    const accessToken = authService.generateAccessToken(user);
+    const refreshToken = authService.generateRefreshToken(user);
 
-  res.cookie('refreshToken', refreshToken, {
-    httpOnly: true,
-    secure: config.env === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-  });
+    res.cookie('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: config.env === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
 
-  // Redirect to frontend with access token and active agency ID
-  const agencyId = user.activeAgencyId || (user.agencies && user.agencies[0]?.agencyId) || '';
-  res.redirect(`${config.frontendUrl}/auth/callback?token=${accessToken}&agencyId=${agencyId}`);
+    // Redirect to frontend with access token and active agency ID
+    const activeAg = user.activeAgencyId || (user.agencies && user.agencies[0]?.agencyId) || '';
+    const agencyId = typeof activeAg === 'object' ? (activeAg._id || activeAg.id || activeAg) : activeAg;
+    return res.redirect(`${config.frontendUrl}/auth/callback?token=${accessToken}&agencyId=${agencyId}`);
+  } catch (err) {
+    console.error('[Google Callback Error]:', err);
+    const message = encodeURIComponent(err?.message || 'Google authentication failed');
+    return res.redirect(`${config.frontendUrl}/login?error=${message}`);
+  }
 });
 
 exports.refreshToken = catchAsync(async (req, res) => {

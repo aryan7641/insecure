@@ -11,11 +11,15 @@ module.exports = (passport) => {
       },
       async (accessToken, refreshToken, profile, done) => {
         try {
+          const email = (profile.emails && profile.emails[0] ? profile.emails[0].value : profile._json?.email) || null;
+          const name = profile.displayName || profile._json?.name || [profile.name?.givenName, profile.name?.familyName].filter(Boolean).join(' ') || (email ? email.split('@')[0] : 'User');
+          const picture = (profile.photos && profile.photos[0] ? profile.photos[0].value : profile._json?.picture) || null;
+
           const user = {
             googleId: profile.id,
-            email: profile.emails && profile.emails[0] ? profile.emails[0].value : null,
-            name: profile.displayName,
-            picture: profile.photos && profile.photos[0] ? profile.photos[0].value : null,
+            email: email ? email.toLowerCase().trim() : null,
+            name,
+            picture,
           };
           return done(null, user);
         } catch (error) {
