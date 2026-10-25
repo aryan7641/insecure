@@ -51,10 +51,22 @@ const getViewUrl = catchAsync(async (req, res) => {
   }).send(res);
 });
 
+const getDrafts = catchAsync(async (req, res) => {
+  const result = await ocrService.getDrafts(req.agencyId);
+  return new ApiResponse(200, 'Pending extraction drafts retrieved', result).send(res);
+});
+
+const deleteDraft = catchAsync(async (req, res) => {
+  const result = await ocrService.deleteDraft(req.agencyId, req.params.docId, req.user);
+  return new ApiResponse(200, 'Draft deleted successfully', result).send(res);
+});
+
 module.exports = {
   extractPolicyPdf,
   reExtractWithSubtype,
   confirmPolicyFromOcr,
   getResult,
-  getViewUrl
+  getViewUrl,
+  getDrafts,
+  deleteDraft
 };

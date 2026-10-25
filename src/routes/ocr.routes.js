@@ -11,7 +11,11 @@ router.use(setAgencyContext);
 router.post('/extract-pdf', uploadDocument.single('file'), ocrController.extractPolicyPdf);
 router.post('/extract', uploadDocument.single('file'), ocrController.extractPolicyPdf);
 
-// 2. Re-extract with an explicitly selected subtype
+// 2. Pending extraction drafts / review queue
+router.get('/drafts', ocrController.getDrafts);
+router.delete('/drafts/:docId', ocrController.deleteDraft);
+
+// 3. Re-extract with an explicitly selected subtype
 router.post('/re-extract/:docId', ocrController.reExtractWithSubtype);
 router.post('/:docId/re-extract', ocrController.reExtractWithSubtype);
 

@@ -528,19 +528,76 @@ const getResult = async (docId, agencyId) => {
 
   return {
     documentId: document._id,
+    jobId: job?._id,
     fileName: document.fileName,
     blobUrl: document.blobUrl,
-    extractedData: document.extractedData,
+    extractedData: job?.extractedData || document.extractedData,
     classification: job?.classificationResult,
+    duplicateCandidates: job?.duplicateCandidates || { customers: [], policies: [] },
     ocrStatus: document.ocrStatus,
     verificationState: document.verificationState,
-    ocrConfirmed: document.ocrConfirmed
+    ocrConfirmed: document.ocrConfirmed,
+    status: job?.status
   };
+};
+
+/**
+ * List pending / review-required extraction drafts for an agency
+ */
+const getDrafts = async (agencyId) => {
+  const jobs = await ExtractionJob.find({
+    agencyId,
+    status: { $in: ['review_required', 'extracted', 'failed'] }
+  })
+    .populate('documentId')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 });
+
+  return jobs.map(job => {
+    const ext = job.extractedData?.extractedData || job.extractedData || {};
+    const extPol = ext.policy || {};
+    const extCust = ext.customer || {};
+    const extPrem = ext.premium || {};
+
+    return {
+      id: job._id,
+      jobId: job._id,
+      documentId: job.documentId?._id || job.documentId,
+      fileName: job.documentId?.fileName || 'Policy Document',
+      fileSize: job.documentId?.fileSize || null,
+      status: job.status,
+      insuranceType: job.insuranceType || job.classificationResult?.effectiveType || 'general',
+      insuranceSubtype: job.insuranceSubtype || job.classificationResult?.effectiveSubtype || '',
+      policyNumber: extPol.policyNumber?.value || extPol.policyNumber || 'Pending Review',
+      insurer: extPol.insurer?.value || extPol.insurer || extPol.insuranceCompany || '—',
+      customerName: extCust.name?.value || extCust.name || '—',
+      customerMobile: extCust.mobile?.value || extCust.mobile || '—',
+      premium: extPrem.finalPremium?.value || extPrem.finalPremium || extPrem.premium || 0,
+      createdAt: job.createdAt,
+      createdBy: job.createdBy
+    };
+  });
+};
+
+/**
+ * Discard / delete a pending extraction draft
+ */
+const deleteDraft = async (agencyId, docId, user) => {
+  await ExtractionJob.deleteOne({ documentId: docId, agencyId });
+  const document = await Document.findOne({ _id: docId, agencyId });
+  if (document) {
+    document.isDeleted = true;
+    document.deletedAt = new Date();
+    await document.save();
+  }
+  return { message: 'Draft deleted successfully' };
 };
 
 module.exports = {
   extractPolicyPdf,
   reExtractWithSubtype,
   confirmPolicyFromOcr,
-  getResult
+  getResult,
+  getDrafts,
+  deleteDraft
 };
